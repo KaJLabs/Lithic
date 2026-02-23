@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = [
+  "packages/compiler/lithc",
+  "packages/compiler/lithfmt",
+  "packages/compiler/lithlint",
+  "packages/compiler/ir",
+  "packages/vm/lithovm",
+  "packages/vm/bytecode",
+  "packages/vm/receipts",
+  "packages/vm/zk-verifier",
+  "packages/standards/lep100-tests",
+]
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"
