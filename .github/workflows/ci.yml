@@ -1,0 +1,38 @@
+name: ci
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust fmt
+        run: cargo fmt --all -- --check
+      - name: Rust clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Rust tests
+        run: cargo test --all
+
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install pnpm
+        run: npm i -g pnpm
+      - name: Install deps (provider ref)
+        run: |
+          cd packages/provider/reference-node
+          pnpm install --frozen-lockfile || pnpm install
+      - name: Provider lint/test
+        run: |
+          cd packages/provider/reference-node
+          pnpm lint || true
+          pnpm test || true

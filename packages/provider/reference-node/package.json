@@ -1,0 +1,17 @@
+{
+  "name": "@lithic/reference-provider",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node src/server.js",
+    "build": "echo \"no build step (scaffold)\"",
+    "lint": "echo \"no lint configured (scaffold)\"",
+    "test": "node src/selftest.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "tweetnacl": "^1.0.3",
+    "tweetnacl-util": "^0.15.1"
+  }
+}

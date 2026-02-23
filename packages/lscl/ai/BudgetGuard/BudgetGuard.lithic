@@ -1,0 +1,14 @@
+// LSCL::BudgetGuard (scaffold)
+contract BudgetGuard {
+  state {
+    max_per_user: u256
+  }
+
+  constructor(max_per_user: u256) {
+    self.max_per_user = max_per_user
+  }
+
+  public fn check_budget(user: address, cost: u256) {
+    // In real Lithic: enforce per-user spending
+  }
+}

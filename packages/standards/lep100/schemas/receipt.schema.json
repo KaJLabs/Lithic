@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LEP100-4 ReceiptV1",
+  "type": "object",
+  "required": [
+    "request_id",
+    "contract_address",
+    "provider_id",
+    "model_hash",
+    "input_hash",
+    "output_hash",
+    "cost_used",
+    "timestamp",
+    "provider_signature"
+  ],
+  "properties": {
+    "request_id": {
+      "type": "string"
+    },
+    "contract_address": {
+      "type": "string"
+    },
+    "provider_id": {
+      "type": "string"
+    },
+    "model_hash": {
+      "type": "string"
+    },
+    "input_hash": {
+      "type": "string"
+    },
+    "output_hash": {
+      "type": "string"
+    },
+    "cost_used": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "timestamp": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "provider_signature": {
+      "type": "string"
+    }
+  }
+}

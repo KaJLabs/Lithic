@@ -1,0 +1,16 @@
+// LSCL::PolicyGuard (scaffold)
+contract PolicyGuard {
+  state {
+    owner: address
+    max_temperature: u64
+  }
+
+  constructor(owner: address, max_temperature: u64) {
+    self.owner = owner
+    self.max_temperature = max_temperature
+  }
+
+  public fn validate_temperature(temp: u64) {
+    // In real Lithic: require(temp <= self.max_temperature)
+  }
+}

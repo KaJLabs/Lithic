@@ -1,0 +1,10 @@
+// LSCL::TraceRecorder (scaffold)
+contract TraceRecorder {
+  state {
+    last_receipt_hash: bytes32
+  }
+
+  public fn record(receipt_hash: bytes32) {
+    self.last_receipt_hash = receipt_hash
+  }
+}
