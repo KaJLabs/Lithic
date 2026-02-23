@@ -1,0 +1,26 @@
+requires AI_CALL
+
+contract ZkRequiredExample {
+
+  state {
+    last_output_hash: bytes32
+  }
+
+  ai.service DemoModel {
+    endpoint: "agii://provider-ref-001/demo"
+    max_cost: 20 LITHO
+    // zk_required: true   // (future syntax)
+  }
+
+  public fn run(prompt: string) {
+    let req = ai.request DemoModel { prompt: prompt, temperature: 0.1 }
+
+    ai.fulfill(req) |response| {
+      self.last_output_hash = response.output_hash
+    }
+    .timeout(20 blocks)
+    .on_timeout {
+      revert("AI timeout")
+    }
+  }
+}
