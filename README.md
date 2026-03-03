@@ -1,6 +1,6 @@
 # Lithic — AI-Native Smart Contract Language for Lithosphere
 
-[![Status](https://img.shields.io/badge/status-draft-blue.svg)](#)
+[![Status](https://img.shields.io/badge/status-final-blue.svg)](#)
 [![Language](https://img.shields.io/badge/language-Lithic%20(.lithic)-111827.svg)](#)
 [![Target](https://img.shields.io/badge/target-LithoVM-0ea5e9.svg)](#)
 [![Standards](https://img.shields.io/badge/standards-LEP100%20(1%E2%80%9314)-7b2cff.svg)](#lep100-standards)
