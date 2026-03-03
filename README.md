@@ -10,7 +10,7 @@
 
 **Website:** `lithic.at` • `lithiclang.ai`  
 **Docs:** `docs.lithosphere.network`  
-**Proposed by:** J. King Kasr  
+**Created by:** J. King Kasr  
 **Maintained by:** KaJ Labs  
 **Network:** Lithosphere  
 **VM Target:** LithoVM  
@@ -210,7 +210,7 @@ Please follow coding standards and include tests where applicable.
 
 ## Credits
 
-Lithic is proposed by **J. King Kasr** and maintained by **KaJ Labs** for the Lithosphere ecosystem.
+Lithic is created by **J. King Kasr** and maintained by **KaJ Labs** for the Lithosphere ecosystem.
 
 ---
 
