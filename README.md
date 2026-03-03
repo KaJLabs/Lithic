@@ -23,124 +23,197 @@
 
 It is designed for:
 
-- **Typed AI services** and **async request/fulfill** workflows
-- Deterministic, consensus-safe execution targeting **LithoVM**
-- **Cost caps**, **per-user budgets**, and programmable spend governance
-- **Capability-based permissions** for safe system programming
-- Cryptographic **provenance receipts** and audit-ready trace records
-- Optional **zk-verifiable AI execution** for high-assurance workflows
-- Secure, audited reference modules via **LSCL** (Lithosphere Secure Contracts Library)
+- Typed AI services and async request/fulfill workflows  
+- Deterministic, consensus-safe execution targeting LithoVM  
+- Cost caps, per-user budgets, and programmable spend governance  
+- Capability-based permissions for safe system programming  
+- Cryptographic provenance receipts and audit-ready trace records  
+- Optional zk-verifiable AI execution for high-assurance workflows  
+- Secure, audited reference modules via LSCL (Lithosphere Secure Contracts Library)
 
 ---
 
 ## Key Features
 
 ### AI-native primitives
-- `ai.service` declarations with typed configuration
-- `ai.request` / `ai.fulfill` lifecycle
-- Async callbacks + `.timeout()` handling
-- Receipt binding (model/input/output hashes) for verification
+
+- `ai.service` declarations with typed configuration  
+- `ai.request` / `ai.fulfill` lifecycle  
+- Async callbacks + `.timeout()` handling  
+- Receipt binding (model/input/output hashes) for verification  
 
 ### Built-in economic safety
-- Per-call max cost ceilings
-- Per-user budgets and deterministic epochs
-- Escrow locking + settlement patterns
+
+- Per-call max cost ceilings  
+- Per-user budgets and deterministic epochs  
+- Escrow locking + settlement patterns  
 
 ### Capability-based security
-- Explicit permissions for sensitive ops (AI calls, transfers, syscalls, zk verification)
-- Principle-of-least-privilege by construction
+
+- Explicit permissions for sensitive ops (AI calls, transfers, syscalls, zk verification)  
+- Principle-of-least-privilege by construction  
 
 ### Production-grade tooling
-- `lithc` compiler (`.lithic` → LithoVM bytecode)
-- `lithfmt` formatter + `lithlint` security lints
-- LSP support (editor integrations)
-- Deterministic devnet + fuzz harnesses + conformance tests
+
+- `lithc` compiler (.lithic → LithoVM bytecode)  
+- `lithfmt` formatter + `lithlint` security lints  
+- LSP support (editor integrations)  
+- Deterministic devnet + fuzz harnesses + conformance tests  
 
 ### LSCL secure modules
+
 OpenZeppelin-like primitives for AI and assets:
-- `AgentWallet` • `ToolRouter` • `PolicyGuard`
-- `BudgetGuard` • `TraceRecorder`
-- NFT / Multi-token / Royalties / Metadata / Bridge interfaces
+
+- AgentWallet  
+- ToolRouter  
+- PolicyGuard  
+- BudgetGuard  
+- TraceRecorder  
+- NFT / Multi-token / Royalties / Metadata / Bridge interfaces  
 
 ---
 
 ## Quick Example (AI + Async + Timeout)
 
-```lithic
-requires AI_CALL
+    requires AI_CALL
 
-contract RiskAnalyzer {
-  state { last_report: string }
+    contract RiskAnalyzer {
+      state { last_report: string }
 
-  ai.service GPT4 {
-    endpoint: "agii://provider42/gpt4"
-    max_cost: 10 LITHO
-    // zk_required: true  // optional (LEP100-5)
-  }
+      ai.service GPT4 {
+        endpoint: "agii://provider42/gpt4"
+        max_cost: 10 LITHO
+        // zk_required: true  // optional (LEP100-5)
+      }
 
-  public fn analyze(text: string) {
-    let req = ai.request GPT4 {
-      prompt: text,
-      temperature: 0.1,
-      max_tokens: 400
+      public fn analyze(text: string) {
+        let req = ai.request GPT4 {
+          prompt: text,
+          temperature: 0.1,
+          max_tokens: 400
+        }
+
+        ai.fulfill(req) |response| {
+          self.last_report = response.text
+        }
+        .timeout(20 blocks)
+        .on_timeout { revert("AI timeout") }
+      }
     }
 
-    ai.fulfill(req) |response| {
-      self.last_report = response.text
-    }
-    .timeout(20 blocks)
-    .on_timeout { revert("AI timeout") }
-  }
-}
+---
 
+## LEP100 Standards
 
-LEP100 Standards
 Lithic is the reference language target for the LEP100 modular protocol stack:
-LEP100-1 — Lithic Core Specification
-LEP100-2..5 — AI providers, budgets, receipts, zk execution
-LEP100-6..13 — NFTs, composability, shared ownership, multi-token, royalties, metadata, marketplace hooks, bridge mint/burn
-LEP100-14 — Privacy-Preserving Account Linking (PPAL)
 
-Toolchain
-Compiler
-lithc — compile, test, deploy
-Developer Experience
-lithfmt — canonical formatting
-lithlint — security checks (missing caps, unsafe async, budget misconfig)
-lithic-lsp — language server for IDEs
-Testing & Security
-Deterministic devnet runner
-AI mock provider + receipt verifier
-Fuzz testing harnesses
-LEP100 conformance test suite (1–14)
+- LEP100-1 — Lithic Core Specification  
+- LEP100-2..5 — AI providers, budgets, receipts, zk execution  
+- LEP100-6..13 — NFTs, composability, shared ownership, multi-token, royalties, metadata, marketplace hooks, bridge mint/burn  
+- LEP100-14 — Privacy-Preserving Account Linking (PPAL)
 
-Security Model
-Lithic enforces capability-based permissions:
-requires AI_CALL
-requires TOKEN_TRANSFER
-requires ZK_VERIFY
-requires BRIDGE_MINT
-requires PPAL_CONSUME
+---
+
+## Toolchain
+
+### Compiler
+
+- lithc — compile, test, deploy  
+
+### Developer Experience
+
+- lithfmt — canonical formatting  
+- lithlint — security checks (missing caps, unsafe async, budget misconfig)  
+- lithic-lsp — language server for IDEs  
+
+### Testing & Security
+
+- Deterministic devnet runner  
+- AI mock provider + receipt verifier  
+- Fuzz testing harnesses  
+- LEP100 conformance test suite (1–14)
+
+---
+
+## Security Model
+
+Lithic enforces capability-based permissions.
+
+### Required capabilities
+
+    requires AI_CALL
+    requires TOKEN_TRANSFER
+    requires ZK_VERIFY
+    requires BRIDGE_MINT
+    requires PPAL_CONSUME
 
 Contracts MUST explicitly declare sensitive privileges, enabling:
-safer audits
-safer deployment policies
-less accidental attack surface
 
-Repository Layout (recommended)
-lithic/
-├─ compiler/            # lithc (frontend + IR + codegen)
-├─ stdlib/              # standard library modules
-├─ lscl/                # secure reference modules (optional subtree/submodule)
-├─ specs/               # LEP100-1 (and related) language specs
-├─ examples/            # sample contracts (AI, NFTs, bridges)
-├─ tests/               # compiler + runtime tests
-└─ docs/                # documentation site content
+- safer audits  
+- safer deployment policies  
+- reduced accidental attack surface  
 
+---
 
-Credits
-Lithic is proposed by J. King Kasr and maintained by KaJ Labs for the Lithosphere ecosystem.
+## Repository Layout (recommended)
 
-License
+    lithic/
+    ├─ compiler/            # lithc (frontend + IR + codegen)
+    ├─ stdlib/              # standard library modules
+    ├─ lscl/                # secure reference modules (optional subtree/submodule)
+    ├─ specs/               # LEP100-1 (and related) language specs
+    ├─ examples/            # sample contracts (AI, NFTs, bridges)
+    ├─ tests/               # compiler + runtime tests
+    └─ docs/                # documentation site content
+
+---
+
+## Getting Started
+
+    # clone repo
+    git clone https://github.com/KaJLabs/lithosphere.git
+    cd lithosphere/lithic
+
+    # build compiler
+    make build
+
+    # compile contract
+    lithc compile examples/risk_analyzer.lithic
+
+    # run tests
+    make test
+
+---
+
+## Roadmap
+
+- [x] Core language specification  
+- [x] AI async execution model  
+- [x] Capability security model  
+- [ ] Full zk-verifiable pipeline  
+- [ ] Formal verification toolkit  
+- [ ] Production IDE extensions  
+
+---
+
+## Contributing
+
+Contributions are welcome from the community.
+
+1. Fork the repository  
+2. Create a feature branch  
+3. Submit a pull request  
+
+Please follow coding standards and include tests where applicable.
+
+---
+
+## Credits
+
+Lithic is proposed by **J. King Kasr** and maintained by **KaJ Labs** for the Lithosphere ecosystem.
+
+---
+
+## License
+
 Apache-2.0 (recommended)
-
