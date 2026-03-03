@@ -1,4 +1,4 @@
-# Lithic Ecosystem
+# Lithic Lang
 
 This repository is a **production-friendly, enterprise-ready** scaffold for the Lithic ecosystem on Lithosphere/LithoVM.
 It cleanly separates:
