@@ -9,7 +9,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-black.svg)](#license)
 
 **Website:** `lithic.at` • `lithiclang.ai`  
-**Docs:** `docs.lithosphere.network`  
+**Docs:** `docs.lithic.at`  
 **Created by:** J. King Kasr  
 **Maintained by:** KaJ Labs  
 **Network:** Lithosphere  
