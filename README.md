@@ -216,4 +216,4 @@ Lithic is created by **J. King Kasr** and maintained by **KaJ Labs** for the Lit
 
 ## License
 
-Apache-2.0 (recommended)
+Apache-2.0
