@@ -19,7 +19,7 @@
 
 ## What is Lithic?
 
-**Lithic** is Lithosphere’s native smart-contract programming language for deploying **AI-native** applications onchain.
+**Lithic** is Lithosphere’s native smart-contract programming language for deploying **AI-native** applications and agents onchain.
 
 It is designed for:
 
