@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate repo structure
+        run: |
+          test -f README.md
+          test -d docs
+          test -d contracts
+          test -d schemas
+      - name: Check scripts executable
+        run: |
+          test -x tooling/bin/lithc
+          test -x tooling/bin/lithfmt
+          test -x tooling/bin/lithlint
+          test -x tooling/bin/lithdev

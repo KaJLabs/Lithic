@@ -1,0 +1,46 @@
+struct Reservation {
+    payer: Address;
+    ceiling: u128;
+    reserved: u128;
+    settled: bool;
+    expires_at: u64;
+}
+
+contract BudgetEscrow {
+    storage {
+        reservations: Map<Bytes32, Reservation>;
+    }
+
+    event BudgetReserved(reservation_id: Bytes32, payer: Address, amount: u128);
+    event BudgetSettled(reservation_id: Bytes32, amount: u128);
+    event BudgetRefunded(reservation_id: Bytes32, amount: u128);
+
+    public payable fn reserve(reservation_id: Bytes32, ceiling: u128, expires_at: u64) {
+        assert(msg.value == ceiling, "reservation_value_mismatch");
+        reservations[reservation_id] = Reservation {
+            payer: msg.sender,
+            ceiling,
+            reserved: msg.value,
+            settled: false,
+            expires_at
+        };
+        emit BudgetReserved(reservation_id, msg.sender, msg.value);
+    }
+
+    public fn settle(reservation_id: Bytes32, spend: u128) {
+        let r = reservations[reservation_id];
+        assert(!r.settled, "already_settled");
+        assert(spend <= r.ceiling, "ceiling_exceeded");
+        reservations[reservation_id].settled = true;
+        emit BudgetSettled(reservation_id, spend);
+    }
+
+    public fn refund(reservation_id: Bytes32) {
+        let r = reservations[reservation_id];
+        assert(!r.settled, "already_settled");
+        assert(block.timestamp >= r.expires_at, "not_expired");
+        reservations[reservation_id].settled = true;
+        transfer_native(r.payer, r.reserved);
+        emit BudgetRefunded(reservation_id, r.reserved);
+    }
+}

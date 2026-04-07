@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Lithic Contract Events",
+  "type": "object",
+  "required": ["contract", "events"],
+  "properties": {
+    "contract": {"type": "string"},
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "topic", "fields"],
+        "properties": {
+          "name": {"type": "string"},
+          "topic": {"type": "string"},
+          "fields": {"type": "array"}
+        }
+      }
+    }
+  }
+}

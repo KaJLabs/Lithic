@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Lithic Contract Manifest",
+  "type": "object",
+  "required": ["package", "contract", "capabilities", "dependencies", "target"],
+  "properties": {
+    "package": {"type": "object"},
+    "contract": {"type": "object"},
+    "capabilities": {"type": "object"},
+    "dependencies": {"type": "object"},
+    "target": {"type": "object"}
+  }
+}

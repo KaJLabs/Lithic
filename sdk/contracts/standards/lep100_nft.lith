@@ -1,0 +1,58 @@
+contract LEP100NFT {
+    storage {
+        name: String;
+        symbol: String;
+        owner_of: Map<u128, Address>;
+        token_uri: Map<u128, String>;
+        approvals: Map<u128, Address>;
+        operator_approvals: Map<(Address, Address), bool>;
+        next_token_id: u128;
+    }
+
+    capability Admin;
+    capability Mint;
+
+    event Transfer(from: Address, to: Address, token_id: u128);
+    event Approval(owner: Address, approved: Address, token_id: u128);
+    event ApprovalForAll(owner: Address, operator: Address, approved: bool);
+
+    init(name: String, symbol: String) {
+        self.name = name;
+        self.symbol = symbol;
+        self.next_token_id = 1;
+    }
+
+    public view fn owner(token_id: u128) -> Address {
+        return owner_of[token_id];
+    }
+
+    public fn approve(to: Address, token_id: u128) {
+        assert(owner_of[token_id] == msg.sender, "not_owner");
+        approvals[token_id] = to;
+        emit Approval(msg.sender, to, token_id);
+    }
+
+    public fn set_approval_for_all(operator: Address, approved: bool) {
+        operator_approvals[(msg.sender, operator)] = approved;
+        emit ApprovalForAll(msg.sender, operator, approved);
+    }
+
+    public fn transfer_from(from: Address, to: Address, token_id: u128) {
+        let is_operator = operator_approvals[(from, msg.sender)];
+        let is_approved = approvals[token_id] == msg.sender;
+        assert(owner_of[token_id] == from, "invalid_owner");
+        assert(msg.sender == from || is_operator || is_approved, "not_authorized");
+        owner_of[token_id] = to;
+        approvals[token_id] = zero_address();
+        emit Transfer(from, to, token_id);
+    }
+
+    public fn mint(to: Address, uri: String) requires Mint -> u128 {
+        let token_id = next_token_id;
+        owner_of[token_id] = to;
+        token_uri[token_id] = uri;
+        next_token_id += 1;
+        emit Transfer(zero_address(), to, token_id);
+        return token_id;
+    }
+}

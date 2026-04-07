@@ -1,0 +1,47 @@
+import "../standards/ai_provider_registry.lith";
+import "../standards/budget_escrow.lith";
+import "../standards/provenance_verifier.lith";
+
+struct AIRequest {
+    provider_id: Bytes32;
+    input_hash: Bytes32;
+    max_cost: u128;
+    timeout: u64;
+}
+
+contract TreasuryAgent {
+    storage {
+        owner: Address;
+        provider_registry: Address;
+        budget_escrow: Address;
+        provenance_verifier: Address;
+        requests: Map<Bytes32, AIRequest>;
+    }
+
+    capability Admin;
+    capability AIInvoke;
+    capability Spend;
+
+    event AIRequested(request_id: Bytes32, provider_id: Bytes32, max_cost: u128);
+    event AIFulfilled(request_id: Bytes32, receipt_id: Bytes32, final_cost: u128);
+
+    init(owner: Address, registry: Address, escrow: Address, verifier: Address) {
+        self.owner = owner;
+        self.provider_registry = registry;
+        self.budget_escrow = escrow;
+        self.provenance_verifier = verifier;
+    }
+
+    public payable fn request_inference(request_id: Bytes32, provider_id: Bytes32, input_hash: Bytes32, max_cost: u128, timeout: u64) requires AIInvoke, Spend {
+        assert(msg.value == max_cost, "budget_required");
+        requests[request_id] = AIRequest { provider_id, input_hash, max_cost, timeout };
+        call_contract(budget_escrow, "reserve", [request_id, max_cost, timeout], value: msg.value);
+        emit AIRequested(request_id, provider_id, max_cost);
+    }
+
+    public fn fulfill(request_id: Bytes32, receipt_id: Bytes32, receipt: Bytes, signer: Address, sig: Signature, final_cost: u128) {
+        call_contract(provenance_verifier, "verify", [receipt_id, receipt, signer, sig]);
+        call_contract(budget_escrow, "settle", [request_id, final_cost]);
+        emit AIFulfilled(request_id, receipt_id, final_cost);
+    }
+}

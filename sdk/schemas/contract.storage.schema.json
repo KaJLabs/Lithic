@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Lithic Contract Storage Layout",
+  "type": "object",
+  "required": ["contract", "version", "slots", "maps", "structs", "encoding", "upgrade_compatibility"],
+  "properties": {
+    "contract": {"type": "string"},
+    "version": {"type": "string"},
+    "slots": {"type": "array"},
+    "maps": {"type": "array"},
+    "structs": {"type": "array"},
+    "encoding": {"type": "string"},
+    "upgrade_compatibility": {"type": "object"}
+  }
+}

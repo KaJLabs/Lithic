@@ -1,0 +1,24 @@
+struct VerifierEntry {
+    circuit_id: Bytes32;
+    verifier_key_hash: Bytes32;
+    active: bool;
+}
+
+contract ZKVerifierRegistry {
+    storage {
+        verifiers: Map<Bytes32, VerifierEntry>;
+    }
+
+    capability Admin;
+
+    event VerifierRegistered(circuit_id: Bytes32, verifier_key_hash: Bytes32);
+
+    public fn register(circuit_id: Bytes32, verifier_key_hash: Bytes32) requires Admin {
+        verifiers[circuit_id] = VerifierEntry { circuit_id, verifier_key_hash, active: true };
+        emit VerifierRegistered(circuit_id, verifier_key_hash);
+    }
+
+    public view fn is_active(circuit_id: Bytes32) -> bool {
+        return verifiers[circuit_id].active;
+    }
+}

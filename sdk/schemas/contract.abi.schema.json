@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Lithic Contract ABI",
+  "type": "object",
+  "required": ["contract", "functions"],
+  "properties": {
+    "contract": {"type": "string"},
+    "functions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "selector", "inputs", "outputs", "mutability", "payable", "async", "required_capabilities", "errors"],
+        "properties": {
+          "name": {"type": "string"},
+          "selector": {"type": "string"},
+          "inputs": {"type": "array"},
+          "outputs": {"type": "array"},
+          "mutability": {"type": "string"},
+          "payable": {"type": "boolean"},
+          "async": {"type": "boolean"},
+          "required_capabilities": {"type": "array", "items": {"type": "string"}},
+          "errors": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    }
+  }
+}

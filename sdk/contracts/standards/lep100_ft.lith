@@ -1,0 +1,77 @@
+contract LEP100FungibleToken {
+    storage {
+        name: String;
+        symbol: String;
+        decimals: u8;
+        total_supply: u128;
+        issuer: Address;
+        balances: Map<Address, u128>;
+        allowances: Map<(Address, Address), u128>;
+        metadata_uri: String;
+        lep_version: String;
+    }
+
+    capability Admin;
+    capability Mint;
+    capability Burn;
+
+    event Transfer(from: Address, to: Address, amount: u128);
+    event Approval(owner: Address, spender: Address, amount: u128);
+    event Minted(to: Address, amount: u128);
+    event Burned(from: Address, amount: u128);
+
+    init(name: String, symbol: String, decimals: u8, issuer: Address, metadata_uri: String) {
+        self.name = name;
+        self.symbol = symbol;
+        self.decimals = decimals;
+        self.issuer = issuer;
+        self.metadata_uri = metadata_uri;
+        self.lep_version = "LEP100-FT/1.0.0";
+        self.total_supply = 0;
+    }
+
+    public view fn balance_of(owner: Address) -> u128 {
+        return balances[owner];
+    }
+
+    public view fn allowance(owner: Address, spender: Address) -> u128 {
+        return allowances[(owner, spender)];
+    }
+
+    public fn transfer(to: Address, amount: u128) {
+        assert(balances[msg.sender] >= amount, "insufficient_balance");
+        balances[msg.sender] -= amount;
+        balances[to] += amount;
+        emit Transfer(msg.sender, to, amount);
+    }
+
+    public fn approve(spender: Address, amount: u128) {
+        allowances[(msg.sender, spender)] = amount;
+        emit Approval(msg.sender, spender, amount);
+    }
+
+    public fn transfer_from(from: Address, to: Address, amount: u128) {
+        let allowed = allowances[(from, msg.sender)];
+        assert(allowed >= amount, "allowance_exceeded");
+        assert(balances[from] >= amount, "insufficient_balance");
+        allowances[(from, msg.sender)] = allowed - amount;
+        balances[from] -= amount;
+        balances[to] += amount;
+        emit Transfer(from, to, amount);
+    }
+
+    public fn mint(to: Address, amount: u128) requires Mint {
+        total_supply += amount;
+        balances[to] += amount;
+        emit Minted(to, amount);
+        emit Transfer(zero_address(), to, amount);
+    }
+
+    public fn burn(from: Address, amount: u128) requires Burn {
+        assert(balances[from] >= amount, "insufficient_balance");
+        balances[from] -= amount;
+        total_supply -= amount;
+        emit Burned(from, amount);
+        emit Transfer(from, zero_address(), amount);
+    }
+}

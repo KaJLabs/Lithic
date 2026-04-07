@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "lithc scaffold: compiler entrypoint placeholder"
+echo "Expected future stages: lex -> parse -> typecheck -> capabilities -> IR -> emit artifacts"

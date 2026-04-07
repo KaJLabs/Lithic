@@ -1,0 +1,28 @@
+struct Provider {
+    operator: Address;
+    endpoint_uri: String;
+    model_hash: Bytes32;
+    pricing_uri: String;
+    active: bool;
+}
+
+contract AIProviderRegistry {
+    storage {
+        providers: Map<Bytes32, Provider>;
+    }
+
+    capability Admin;
+
+    event ProviderRegistered(provider_id: Bytes32, operator: Address, model_hash: Bytes32);
+    event ProviderStatusChanged(provider_id: Bytes32, active: bool);
+
+    public fn register(provider_id: Bytes32, operator: Address, endpoint_uri: String, model_hash: Bytes32, pricing_uri: String) requires Admin {
+        providers[provider_id] = Provider { operator, endpoint_uri, model_hash, pricing_uri, active: true };
+        emit ProviderRegistered(provider_id, operator, model_hash);
+    }
+
+    public fn set_active(provider_id: Bytes32, active: bool) requires Admin {
+        providers[provider_id].active = active;
+        emit ProviderStatusChanged(provider_id, active);
+    }
+}

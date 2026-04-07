@@ -1,0 +1,26 @@
+contract AIMeteredService {
+    storage {
+        admin: Address;
+        service_fee_bps: u16;
+        accepted_provider: Bytes32;
+    }
+
+    capability Admin;
+    capability AIInvoke;
+
+    event ServiceCharged(user: Address, amount: u128, request_id: Bytes32);
+
+    init(admin: Address, accepted_provider: Bytes32) {
+        self.admin = admin;
+        self.accepted_provider = accepted_provider;
+        self.service_fee_bps = 250;
+    }
+
+    public payable fn invoke(request_id: Bytes32, provider_id: Bytes32, payload_hash: Bytes32, max_cost: u128) requires AIInvoke {
+        assert(provider_id == accepted_provider, "unsupported_provider");
+        assert(msg.value >= max_cost, "insufficient_prefund");
+        let fee = (max_cost * service_fee_bps) / 10000;
+        emit ServiceCharged(msg.sender, fee, request_id);
+        let _ = payload_hash;
+    }
+}

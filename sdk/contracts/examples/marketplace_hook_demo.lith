@@ -1,0 +1,23 @@
+contract MarketplaceHookDemo {
+    storage {
+        fee_recipient: Address;
+        fee_bps: u16;
+    }
+
+    event BeforeSale(listing_id: Bytes32, token_contract: Address, token_id: u128, price: u128);
+    event AfterSale(listing_id: Bytes32, buyer: Address, seller: Address, price: u128, fee: u128);
+
+    init(fee_recipient: Address, fee_bps: u16) {
+        self.fee_recipient = fee_recipient;
+        self.fee_bps = fee_bps;
+    }
+
+    public fn before_sale(listing_id: Bytes32, token_contract: Address, token_id: u128, price: u128) {
+        emit BeforeSale(listing_id, token_contract, token_id, price);
+    }
+
+    public fn after_sale(listing_id: Bytes32, buyer: Address, seller: Address, price: u128) {
+        let fee = (price * fee_bps) / 10000;
+        emit AfterSale(listing_id, buyer, seller, price, fee);
+    }
+}

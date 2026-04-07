@@ -1,0 +1,33 @@
+struct Receipt {
+    request_id: Bytes32;
+    provider_id: Bytes32;
+    model_hash: Bytes32;
+    input_hash: Bytes32;
+    output_hash: Bytes32;
+    cost: u128;
+    timestamp: u64;
+}
+
+contract ProvenanceVerifier {
+    storage {
+        used_receipts: Map<Bytes32, bool>;
+        trusted_signers: Map<Address, bool>;
+    }
+
+    capability Admin;
+
+    event ReceiptVerified(receipt_id: Bytes32, provider_id: Bytes32, signer: Address);
+
+    public fn set_trusted_signer(signer: Address, trusted: bool) requires Admin {
+        trusted_signers[signer] = trusted;
+    }
+
+    public fn verify(receipt_id: Bytes32, receipt: Receipt, signer: Address, sig: Signature) {
+        assert(!used_receipts[receipt_id], "receipt_replayed");
+        assert(trusted_signers[signer], "untrusted_signer");
+        let digest = hash_struct(receipt);
+        assert(verify_sig(signer, digest, sig), "invalid_signature");
+        used_receipts[receipt_id] = true;
+        emit ReceiptVerified(receipt_id, receipt.provider_id, signer);
+    }
+}

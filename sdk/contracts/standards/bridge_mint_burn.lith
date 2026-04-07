@@ -1,0 +1,28 @@
+contract BridgeMintBurn {
+    storage {
+        processed_messages: Map<Bytes32, bool>;
+        minters: Map<Address, bool>;
+    }
+
+    capability Admin;
+    capability Mint;
+    capability Burn;
+
+    event BridgeMint(message_id: Bytes32, to: Address, amount: u128);
+    event BridgeBurn(message_id: Bytes32, from: Address, amount: u128, target_chain: u64);
+
+    public fn set_minter(account: Address, allowed: bool) requires Admin {
+        minters[account] = allowed;
+    }
+
+    public fn mint_from_bridge(message_id: Bytes32, to: Address, amount: u128, proof: Bytes) requires Mint {
+        assert(!processed_messages[message_id], "bridge_message_replayed");
+        assert(verify_bridge_proof(message_id, to, amount, proof), "invalid_bridge_proof");
+        processed_messages[message_id] = true;
+        emit BridgeMint(message_id, to, amount);
+    }
+
+    public fn burn_to_bridge(message_id: Bytes32, amount: u128, target_chain: u64) requires Burn {
+        emit BridgeBurn(message_id, msg.sender, amount, target_chain);
+    }
+}

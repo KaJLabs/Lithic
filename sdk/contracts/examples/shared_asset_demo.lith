@@ -1,0 +1,25 @@
+contract SharedAssetDemo {
+    storage {
+        controller_nft: Address;
+        share_balances: Map<Address, u128>;
+        total_shares: u128;
+    }
+
+    event SharesIssued(to: Address, amount: u128);
+    event RevenueDistributed(amount: u128);
+
+    init(controller_nft: Address) {
+        self.controller_nft = controller_nft;
+        self.total_shares = 0;
+    }
+
+    public fn issue_shares(to: Address, amount: u128) {
+        share_balances[to] += amount;
+        total_shares += amount;
+        emit SharesIssued(to, amount);
+    }
+
+    public fn distribute_revenue() payable {
+        emit RevenueDistributed(msg.value);
+    }
+}

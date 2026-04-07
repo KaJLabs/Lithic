@@ -1,0 +1,34 @@
+struct LinkCommitment {
+    account: Address;
+    scope: Bytes32;
+    commitment: Bytes32;
+    revoked: bool;
+}
+
+contract PPALRegistry {
+    storage {
+        links: Map<Bytes32, LinkCommitment>;
+        nullifiers: Map<Bytes32, bool>;
+    }
+
+    event LinkCommitted(link_id: Bytes32, account: Address, scope: Bytes32);
+    event LinkRevoked(link_id: Bytes32);
+
+    public fn commit_link(link_id: Bytes32, scope: Bytes32, commitment: Bytes32) {
+        links[link_id] = LinkCommitment { account: msg.sender, scope, commitment, revoked: false };
+        emit LinkCommitted(link_id, msg.sender, scope);
+    }
+
+    public fn verify_link(link_id: Bytes32, nullifier: Bytes32, proof: Bytes) {
+        assert(!nullifiers[nullifier], "nullifier_reused");
+        assert(!links[link_id].revoked, "link_revoked");
+        assert(verify_privacy_proof(links[link_id].commitment, nullifier, proof), "invalid_privacy_proof");
+        nullifiers[nullifier] = true;
+    }
+
+    public fn revoke(link_id: Bytes32) {
+        assert(links[link_id].account == msg.sender, "not_link_owner");
+        links[link_id].revoked = true;
+        emit LinkRevoked(link_id);
+    }
+}
