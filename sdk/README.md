@@ -5,7 +5,6 @@ Framework for **Lithic Lang** contract authoring, compiler/runtime design, and L
 
 ## What is included
 
-- GitHub-ready project structure
 - Public compiler/runtime architecture docs
 - Module-by-module specs for the authoring stack
 - LEP100/LSCL-style standards scaffolding
