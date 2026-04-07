@@ -8,7 +8,7 @@ Framework for **Lithic Lang** contract authoring, compiler/runtime design, and L
 - Public compiler/runtime architecture docs
 - Module-by-module specs for the authoring stack
 - LEP100/LSCL-style standards scaffolding
-- Example `.lith` contracts for fungible tokens, NFT, AI metering, provenance receipts, budget escrow, bridge mint/burn, and privacy-preserving account linking
+- Example `.lithic` contracts for fungible tokens, NFT, AI metering, provenance receipts, budget escrow, bridge mint/burn, and privacy-preserving account linking
 - ABI, manifest, storage, and event schemas
 - CI starter workflow
 - Test/spec placeholders for conformance and simulations
