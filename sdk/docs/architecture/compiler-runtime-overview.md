@@ -3,7 +3,7 @@
 ## Pipeline
 
 ```text
-.lith source
+.lithic source
   -> lexer
   -> parser
   -> AST validation
@@ -21,7 +21,7 @@
 
 ## Frontend
 
-- Lexer: tokenization of `.lith` source
+- Lexer: tokenization of `.lithic` source
 - Parser: contract/module declarations, storage blocks, event declarations, capabilities, traits/interfaces
 - AST validator: basic well-formedness and syntactic constraints
 - Resolver: imports, package references, namespacing

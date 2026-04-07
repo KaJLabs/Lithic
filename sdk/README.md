@@ -9,7 +9,7 @@ Framework for **Lithic Lang** contract authoring, compiler/runtime design, and L
 - Public compiler/runtime architecture docs
 - Module-by-module specs for the authoring stack
 - LEP100/LSCL-style standards scaffolding
-- Example `.lith` contracts for fungible tokens, NFT, AI metering, provenance receipts, budget escrow, bridge mint/burn, and privacy-preserving account linking
+- Example `.lithic` contracts for fungible tokens, NFT, AI metering, provenance receipts, budget escrow, bridge mint/burn, and privacy-preserving account linking
 - ABI, manifest, storage, and event schemas
 - CI starter workflow
 - Test/spec placeholders for conformance and simulations
@@ -39,19 +39,19 @@ lithic-lang-public-framework/
     contract.events.schema.json
   contracts/
     standards/
-      lep100_ft.lith
-      lep100_nft.lith
-      ai_provider_registry.lith
-      budget_escrow.lith
-      provenance_verifier.lith
-      zk_verifier_registry.lith
-      bridge_mint_burn.lith
-      ppal_registry.lith
+      lep100_ft.lithic
+      lep100_nft.lithic
+      ai_provider_registry.lithic
+      budget_escrow.lithic
+      provenance_verifier.lithic
+      zk_verifier_registry.lithic
+      bridge_mint_burn.lithic
+      ppal_registry.lithic
     examples/
-      treasury_agent.lith
-      ai_metered_service.lith
-      marketplace_hook_demo.lith
-      shared_asset_demo.lith
+      treasury_agent.lithic
+      ai_metered_service.lithic
+      marketplace_hook_demo.lithic
+      shared_asset_demo.lithic
   stdlib/
     README.md
   tooling/

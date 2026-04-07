@@ -1,6 +1,6 @@
-import "../standards/ai_provider_registry.lith";
-import "../standards/budget_escrow.lith";
-import "../standards/provenance_verifier.lith";
+import "../standards/ai_provider_registry.lithic";
+import "../standards/budget_escrow.lithic";
+import "../standards/provenance_verifier.lithic";
 
 struct AIRequest {
     provider_id: Bytes32;

@@ -21,7 +21,7 @@ edition = "2026"
 
 [contract]
 kind = "service"
-entry = "contracts/examples/treasury_agent.lith"
+entry = "contracts/examples/treasury_agent.lithic"
 upgrade_policy = "governed"
 
 [capabilities]

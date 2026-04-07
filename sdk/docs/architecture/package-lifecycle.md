@@ -1,7 +1,7 @@
 # Package Lifecycle
 
 ## Author
-Write `.lith` source files and package metadata.
+Write `.lithic` source files and package metadata.
 
 ## Build
 Compile into bytecode + ABI + manifest + storage and event schemas.

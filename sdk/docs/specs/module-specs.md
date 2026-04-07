@@ -66,7 +66,7 @@ Responsibilities:
 Compiler frontend/midend/backend entrypoint.
 
 ### lithfmt
-Stable formatting rules for `.lith` code.
+Stable formatting rules for `.lithic` code.
 
 ### lithlint
 Static checks for style, determinism, security, and upgrade safety.
