@@ -42,6 +42,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
+      attestations: write
+      id-token: write
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - run: rustup toolchain install 1.96.0 --profile minimal
@@ -72,6 +74,12 @@ jobs:
           Compress-Archive -Path "dist/$package" -DestinationPath "dist/$package.zip"
           $hash = (Get-FileHash "dist/$package.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $package.zip" | Set-Content -NoNewline "dist/$package.zip.sha256"
+      - name: Attest release archive provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
       - name: Upload release assets
         shell: bash
         env:

@@ -5,7 +5,12 @@
 3. The release workflow builds locked Linux, Windows and Apple Silicon binaries
    for `lithc`, `lithfmt` and `lithlint`.
 4. Verify every archive against its adjacent SHA-256 file and run the packaged
-   compiler against the published examples.
+   compiler against the published examples. Verify its GitHub build provenance:
+
+   ```sh
+   gh attestation verify <archive> --repo KaJLabs/Lithic
+   ```
+
 5. Review the draft GitHub release and publish it only after approval.
 
 The workflow deliberately creates a draft. A passing build does not authorize
