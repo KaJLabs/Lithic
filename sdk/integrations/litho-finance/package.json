@@ -1,0 +1,6 @@
+{
+  "name": "litho-finance-integration-case",
+  "private": true,
+  "scripts": { "test": "node --test service.test.cjs" },
+  "devDependencies": { "typescript": "5.9.3" }
+}

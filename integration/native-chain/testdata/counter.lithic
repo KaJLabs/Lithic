@@ -1,0 +1,7 @@
+contract Counter {
+    state { number: u64; name: string; balances: map<address, u256>; }
+    event Changed { number: u64 }
+    pub fn initialize(number: u64) -> bool { self.number = number; return true; }
+    pub fn set(number: u64, accept: bool) -> u64 { self.number = number; emit Changed { number: number }; require(accept); return self.number; }
+    pub fn get() -> u64 { return self.number; }
+}

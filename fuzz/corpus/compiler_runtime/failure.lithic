@@ -1,0 +1,9 @@
+contract Guarded {
+  state { value: u64; }
+  pub fn set(allowed: bool, value: u64) -> u64 {
+    self.value = value;
+    require(allowed);
+    return self.value;
+  }
+  pub fn abort() -> u64 { revert(); }
+}

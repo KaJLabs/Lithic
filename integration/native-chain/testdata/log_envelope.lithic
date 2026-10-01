@@ -1,0 +1,12 @@
+contract LogEnvelope {
+    event Note { text: string }
+
+    pub fn initialize() -> bool { return true; }
+
+    pub fn note_many(text: string, count: u64) -> bool {
+        repeat count {
+            emit Note { text: text };
+        }
+        return true;
+    }
+}

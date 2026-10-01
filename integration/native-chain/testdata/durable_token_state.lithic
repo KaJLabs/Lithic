@@ -1,0 +1,26 @@
+contract DurableTokenState {
+    state {
+        balances: map<address, u256>;
+        allowances: map<address, map<address, u256>>;
+    }
+
+    pub fn initialize() -> bool { return true; }
+
+    pub fn set_balance(account: address, amount: u256) -> bool {
+        self.balances[account] = amount;
+        return true;
+    }
+
+    pub fn balance(account: address) -> u256 {
+        return self.balances[account];
+    }
+
+    pub fn approve(owner: address, spender: address, amount: u256) -> bool {
+        self.allowances[owner][spender] = amount;
+        return true;
+    }
+
+    pub fn allowance(owner: address, spender: address) -> u256 {
+        return self.allowances[owner][spender];
+    }
+}

@@ -1,5 +1,6 @@
 [package]
 name = "lithc"
+default-run = "lithc"
 version = "0.2.0"
 edition = "2021"
 license = "Apache-2.0"
@@ -13,3 +14,8 @@ path = "src/main.rs"
 lithic-evm = { path = "../lithic-evm" }
 lithic-lithovm = { path = "../lithic-lithovm" }
 lithic-syntax = { path = "../lithic-syntax" }
+serde_json = "1"
+
+[[bin]]
+name = "lithverify"
+path = "src/verify.rs"

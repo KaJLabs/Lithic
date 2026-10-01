@@ -1,0 +1,30 @@
+name: Lithic fuzz smoke
+
+on:
+  pull_request:
+    paths:
+      - "fuzz/**"
+      - "packages/compiler/lithic-lithovm/**"
+      - "packages/vm/bytecode/**"
+      - "packages/vm/lithovm/**"
+      - "packages/vm/lithovm-host/**"
+      - ".github/workflows/fuzz.yml"
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [bytecode_decode, compiler_runtime, stateful_maps, synchronous_calls, child_creation]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: rustup toolchain install nightly --profile minimal
+      - run: cargo install cargo-fuzz --version 0.13.2 --locked
+      - run: cargo +nightly fuzz run ${{ matrix.target }} --fuzz-dir fuzz -- -max_total_time=30 -max_len=65536 -timeout=10

@@ -120,13 +120,18 @@ fn lithovm_mode_emits_a_versioned_native_artifact() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("\"target\": \"lithovm-native-v9\""));
-    assert!(stdout.contains("\"bytecodeVersion\": 9"));
-    assert!(stdout.contains("\"bytecode\": \"0x4c4954484f564d09"));
+    assert!(stdout.contains("\"target\": \"lithovm-native-v11\""));
+    assert!(stdout.contains("\"artifactVersion\": 1"));
+    assert!(stdout.contains("\"compilerVersion\": \"0.2.0\""));
+    assert!(stdout.contains("\"bytecodeVersion\": 11"));
+    assert!(stdout.contains("\"sourceHash\": \"0x"));
+    assert!(stdout.contains("\"codeHash\": \"0x"));
+    assert!(stdout.contains("\"entrypoints\": ["));
+    assert!(stdout.contains("\"bytecode\": \"0x4c4954484f564d0b"));
 }
 
 #[test]
-fn lithovm_mode_rejects_unsupported_collection_storage() {
+fn lithovm_mode_accepts_typed_map_storage() {
     let path = source_file(
         "lithovm-state",
         "contract C { state { values: map<address, u64>; } pub fn answer() -> u64 { return 42; } }",
@@ -138,7 +143,10 @@ fn lithovm_mode_rejects_unsupported_collection_storage() {
         .expect("run lithc");
     fs::remove_file(&path).expect("remove Lithic fixture");
 
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("collection types are unsupported"));
-    assert!(output.stdout.is_empty());
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("\"bytecodeVersion\": 11"));
 }

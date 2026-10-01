@@ -1,0 +1,7 @@
+contract Effects {
+  event Changed { account: address, value: u64 }
+  pub fn run(account: address, value: u64) -> u64 {
+    emit Changed { account: account, value: value };
+    return value;
+  }
+}

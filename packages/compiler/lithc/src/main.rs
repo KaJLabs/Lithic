@@ -1,7 +1,7 @@
 //! `lithc` — the Lithic compiler.
 //!
 //! The command exposes declaration checks and fail-closed EVM and native
-//! LithoVM backends for the currently supported stateless language subset.
+//! LithoVM backends for the currently supported fail-closed language subset.
 
 use std::process::exit;
 
@@ -24,11 +24,11 @@ EXAMPLES:
     lithc --emit evm apps/examples/frontend/evm-constants.lithic
     lithc --emit lithovm apps/examples/frontend/evm-constants.lithic
 
-EVM output supports its documented stateless subset. Native LithoVM v9 also
+EVM output supports its documented stateless subset. Native LithoVM v11 also
 supports typed constants, gas-bounded repeat loops, mutable and immutable
 locals, staged contract-call intents and native transfers, typed events,
-scalar storage, explicit host context, typed expressions and structured
-if/else returns.
+scalar and typed map storage, checked u64/u256 expressions, explicit host
+context, structured if/else, and transactional require/revert semantics.
 Unsupported semantics reject the complete build."#,
         env!("CARGO_PKG_VERSION")
     );

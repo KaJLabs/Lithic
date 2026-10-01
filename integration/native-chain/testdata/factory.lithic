@@ -1,0 +1,11 @@
+contract Factory {
+    state { child: address; }
+    event Created { child: address }
+    pub fn create(template: address, salt: bytes32, initializer: bytes32, number: u64, accept: bool) -> address {
+        let child: address = create_contract(template, salt, initializer, 0, number);
+        self.child = child;
+        emit Created { child: child };
+        require(accept);
+        return child;
+    }
+}

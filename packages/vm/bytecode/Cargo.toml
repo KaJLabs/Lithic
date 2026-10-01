@@ -6,3 +6,7 @@ license = "Apache-2.0"
 
 [dependencies]
 anyhow = "1"
+sha3 = "0.10"
+
+[dev-dependencies]
+hex = "0.4"

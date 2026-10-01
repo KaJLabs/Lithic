@@ -1,0 +1,1 @@
+contract Token { state { balances: map<address, u256>; } pub fn credit(account: address, amount: u256) -> u256 { self.balances[account] = self.balances[account] + amount; return self.balances[account]; } }

@@ -1,0 +1,11 @@
+contract StorageGas {
+    state { balances: map<address, u256>; }
+    event Note { text: string }
+    pub fn initialize() -> bool { return true; }
+    pub fn write(account: address, amount: u256) -> bool {
+        self.balances[account] = amount;
+        return true;
+    }
+    pub fn read(account: address) -> u256 { return self.balances[account]; }
+    pub fn note(text: string) -> bool { emit Note { text: text }; return true; }
+}

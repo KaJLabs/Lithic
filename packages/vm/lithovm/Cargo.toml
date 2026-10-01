@@ -6,6 +6,12 @@ license = "Apache-2.0"
 
 [dependencies]
 anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 lithovm-bytecode = { path = "../bytecode" }
 lithovm-receipts = { path = "../receipts" }
 lithovm-zk-verifier = { path = "../zk-verifier" }
+
+[dev-dependencies]
+lithic-lithovm = { path = "../../compiler/lithic-lithovm" }
+hex = "0.4"

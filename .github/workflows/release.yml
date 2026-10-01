@@ -56,7 +56,7 @@ jobs:
           package="lithic-toolchain-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir -p "dist/$package/docs"
           cp target/release/lithc target/release/lithfmt target/release/lithlint "dist/$package/"
-          cp README.md docs/IMPLEMENTATION_STATUS.md docs/LITHOVM_ABI_V9.md "dist/$package/docs/"
+          cp README.md docs/IMPLEMENTATION_STATUS.md docs/LITHOVM_ABI_V10.md docs/PRODUCTION_GAP_MATRIX.md docs/FUZZING_EVIDENCE_2026-09-26.md "dist/$package/docs/"
           tar -czf "dist/$package.tar.gz" -C dist "$package"
           if command -v sha256sum >/dev/null; then
             (cd dist && sha256sum "$package.tar.gz" > "$package.tar.gz.sha256")
@@ -70,7 +70,7 @@ jobs:
           $package = "lithic-toolchain-$env:GITHUB_REF_NAME-${{ matrix.target }}"
           New-Item -ItemType Directory -Force "dist/$package/docs" | Out-Null
           Copy-Item target/release/lithc.exe,target/release/lithfmt.exe,target/release/lithlint.exe "dist/$package/"
-          Copy-Item README.md,docs/IMPLEMENTATION_STATUS.md,docs/LITHOVM_ABI_V9.md "dist/$package/docs/"
+          Copy-Item README.md,docs/IMPLEMENTATION_STATUS.md,docs/LITHOVM_ABI_V10.md,docs/PRODUCTION_GAP_MATRIX.md,docs/FUZZING_EVIDENCE_2026-09-26.md "dist/$package/docs/"
           Compress-Archive -Path "dist/$package" -DestinationPath "dist/$package.zip"
           $hash = (Get-FileHash "dist/$package.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $package.zip" | Set-Content -NoNewline "dist/$package.zip.sha256"

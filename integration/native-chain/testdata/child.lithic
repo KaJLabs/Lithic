@@ -1,0 +1,11 @@
+contract Child {
+    state { creator: address; number: u64; }
+    event Initialized { number: u64 }
+    pub fn initialize(number: u64) -> bool {
+        self.creator = msg.sender;
+        self.number = number;
+        emit Initialized { number: number };
+        return true;
+    }
+    pub fn get() -> u64 { return self.number; }
+}

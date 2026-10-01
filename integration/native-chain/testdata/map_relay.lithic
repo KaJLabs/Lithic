@@ -1,0 +1,9 @@
+contract MapRelay {
+    pub fn run(target: address, write_selector: bytes32, read_selector: bytes32, account: address, amount: u256, accept: bool) -> u256 {
+        let written: bool = invoke(target, write_selector, 0, account, amount);
+        require(written);
+        let observed: u256 = invoke(target, read_selector, 0, account);
+        require(accept);
+        return observed;
+    }
+}

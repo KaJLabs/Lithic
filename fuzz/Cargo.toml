@@ -1,0 +1,54 @@
+[package]
+name = "lithic-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+hex = "0.4"
+libfuzzer-sys = "0.4.13"
+lithic-lithovm = { path = "../packages/compiler/lithic-lithovm" }
+lithovm = { path = "../packages/vm/lithovm" }
+lithovm-bytecode = { path = "../packages/vm/bytecode" }
+lithovm-host = { path = "../packages/vm/lithovm-host" }
+
+[[bin]]
+name = "bytecode_decode"
+path = "fuzz_targets/bytecode_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "compiler_runtime"
+path = "fuzz_targets/compiler_runtime.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "stateful_maps"
+path = "fuzz_targets/stateful_maps.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "synchronous_calls"
+path = "fuzz_targets/synchronous_calls.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "child_creation"
+path = "fuzz_targets/child_creation.rs"
+test = false
+doc = false
+bench = false

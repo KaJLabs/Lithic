@@ -1287,6 +1287,7 @@ dependencies = [
  "lithic-evm",
  "lithic-lithovm",
  "lithic-syntax",
+ "serde_json",
 ]
 
 [[package]]
@@ -1310,7 +1311,7 @@ dependencies = [
 
 [[package]]
 name = "lithic-lithovm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "hex",
  "lithic-syntax",
@@ -1337,9 +1338,13 @@ name = "lithovm"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "hex",
+ "lithic-lithovm",
  "lithovm-bytecode",
  "lithovm-receipts",
  "lithovm-zk-verifier",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1347,6 +1352,33 @@ name = "lithovm-bytecode"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "hex",
+ "sha3",
+]
+
+[[package]]
+name = "lithovm-ffi"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "lithic-lithovm",
+ "lithovm",
+ "lithovm-bytecode",
+ "lithovm-host",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lithovm-host"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "lithic-lithovm",
+ "lithovm",
+ "lithovm-bytecode",
+ "serde_json",
+ "sha3",
 ]
 
 [[package]]
