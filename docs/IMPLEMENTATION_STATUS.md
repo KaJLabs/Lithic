@@ -2,6 +2,13 @@
 
 This repository contains a preview compiler backend plus development scaffolds. Its design documents describe intended capabilities; they do not establish production availability.
 
+For the latest standalone compiler/runtime release work and remaining gates,
+see the [25 October completion record](PRODUCTION_COMPLETION_2026_10_25.md).
+The capability descriptions below include historical candidate boundaries.
+Separate October Makalu activation evidence supersedes September statements
+about absent chain integration; it does not establish mainnet deployment or
+full language/standards conformance.
+
 | Tool | Current implementation |
 |---|---|
 | lithc | Parses/checks declarations and emits ABI plus executable EVM or versioned native LithoVM bytecode for the documented subset. Native v11 artifacts include compiler/target versions, exact source/code hashes and canonical full-hash entrypoint selectors. Unsupported semantics fail the complete build. |

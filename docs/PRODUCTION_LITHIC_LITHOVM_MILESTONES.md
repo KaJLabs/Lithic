@@ -2,6 +2,10 @@
 
 Status: approved combined workstream; implementation active
 
+Current closure evidence and unresolved production gates are maintained in
+[the 25 October compiler/runtime record](PRODUCTION_COMPLETION_2026_10_25.md).
+Individual version sections below retain their historical implementation scope.
+
 The production compiler and native runtime ship through one conformance gate.
 Compiler output is accepted only when the native runtime independently decodes,
 validates and executes the exact artifact with deterministic results.
@@ -71,8 +75,9 @@ Status: context, events, staged native transfers and outbound call intents imple
 
 ## M6 — Makalu integration
 
-Status: blocked on identifying and approving the authenticated Lithosphere
-native runtime/RPC adapter; no Makalu deployment has been performed
+Status: native Makalu application activation is recorded in separate October
+chain evidence. General integration/conformance and production acceptance
+remain incomplete; token-specific rehearsal is owned by the LAX workstream.
 
 - deterministic deployment and call interface in the L1 runtime;
 - RPC, wallet, explorer and indexer support;
@@ -80,6 +85,10 @@ native runtime/RPC adapter; no Makalu deployment has been performed
 - performance and denial-of-service limits.
 
 ## M7 — Production release
+
+Status: combined compiler/runtime reproducible packaging and packaged execution
+smoke implemented and exercised on Linux. Cross-platform CI, independent final
+reproduction/security review, signing and publication acceptance remain.
 
 - reproducible builds, SBOM and signed artifacts;
 - compiler/runtime conformance, fuzzing and security review;

@@ -1,6 +1,6 @@
 # Lithic — AI-Native Smart Contract Language for Lithosphere
 
-[![Status](https://img.shields.io/badge/status-final-blue.svg)](#)
+[![Status](https://img.shields.io/badge/status-production%20candidate-orange.svg)](docs/IMPLEMENTATION_STATUS.md)
 [![Language](https://img.shields.io/badge/language-Lithic%20(.lithic)-111827.svg)](#)
 [![Target](https://img.shields.io/badge/target-LithoVM-0ea5e9.svg)](#)
 [![Standards](https://img.shields.io/badge/standards-LEP100%20(1%E2%80%9314)-7b2cff.svg)](#lep100-standards)
@@ -18,6 +18,13 @@
 ---
 
 ## What is Lithic?
+
+The current checkout is a compiler/runtime candidate, not a certified production
+release. See the [implementation status](docs/IMPLEMENTATION_STATUS.md) for the
+supported language subset and [release process](docs/RELEASE_PROCESS.md) for the
+combined compiler/native-runtime build and verification procedure. Network
+activation and contract approvals are established by their separate chain
+evidence; a repository badge or successful local build does not establish them.
 
 **Lithic** is Lithosphere’s native smart-contract programming language for deploying **AI-native** applications and agents onchain.
 
