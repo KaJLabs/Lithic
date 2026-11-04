@@ -14,7 +14,7 @@ spec.loader.exec_module(release)
 
 class ReleaseTests(unittest.TestCase):
     def source_repo(self, directory):
-        root = Path(directory) / 'source'
+        root = Path(directory).resolve() / 'source'
         root.mkdir()
         subprocess.run(['git', 'init', str(root)], check=True, capture_output=True)
         for name in ('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml'):
@@ -34,8 +34,8 @@ class ReleaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = self.source_repo(directory)
             self.commit_source(root)
-            clone = Path(directory) / 'transformed-checkout'
-            subprocess.run(['git', '-c', 'core.autocrlf=true', 'clone', str(root), str(clone)],
+            clone = Path(directory).resolve() / 'transformed-checkout'
+            subprocess.run(['git', 'clone', '-c', 'core.autocrlf=true', str(root), str(clone)],
                            check=True, capture_output=True)
             self.assertEqual((clone / 'Cargo.lock').read_bytes(), b'canonical = "input"\r\n')
             self.assertEqual(release.run(['git', 'status', '--porcelain'], cwd=clone), b'')
@@ -58,8 +58,8 @@ class ReleaseTests(unittest.TestCase):
             fuzz.parent.mkdir(parents=True)
             fuzz.write_bytes(b'fuzz bytes\r\n')
             self.commit_source(root)
-            clone = Path(directory) / 'windows-checkout'
-            subprocess.run(['git', '-c', 'core.autocrlf=true', 'clone', str(root), str(clone)],
+            clone = Path(directory).resolve() / 'windows-checkout'
+            subprocess.run(['git', 'clone', '-c', 'core.autocrlf=true', str(root), str(clone)],
                            check=True, capture_output=True)
             self.assertEqual(release.source_snapshot(root), release.source_snapshot(clone))
             self.assertEqual((clone / 'Cargo.lock').read_bytes(), b'canonical = "input"\n')
