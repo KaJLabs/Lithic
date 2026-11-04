@@ -47,6 +47,12 @@ filename). Use the corresponding native target on Windows x86_64/MSVC or macOS
 Apple Silicon. Cross-compilation is rejected because the packaged smoke must
 execute on the target host. Unix archives use normalized tar/gzip metadata;
 Windows archives use sorted ZIP members with fixed timestamps and permissions.
+MSVC builds use `/Brepro` so PE timestamps and CodeView identifiers are
+deterministic. The macOS FFI is relinked with the stable install name
+`@rpath/liblithovm_ffi.dylib`, instead of an absolute temporary build path.
+These are linker settings, not post-build binary rewriting. If payloads still
+differ, the build fails and retains the actual failing payloads/metadata in a
+separate `*-failed-rebuild` directory; those files are not release candidates.
 
 Reproducibility here means identical payloads from two distinct build roots on
 the same host with the same toolchain/dependencies. It does not establish

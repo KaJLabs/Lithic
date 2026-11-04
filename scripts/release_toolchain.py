@@ -86,6 +86,22 @@ def source_snapshot(root):
     return files
 
 
+def release_rustflags(target, root):
+    flags = ['--remap-path-prefix=' + str(root) + '=/lithic']
+    if target.endswith('windows-msvc'):
+        # MSVC otherwise emits wall-clock PE timestamps and random CodeView IDs.
+        flags.extend(['-C', 'link-arg=/Brepro'])
+    return '\x1f'.join(flags)
+
+
+def native_library_link_args(target):
+    if target.endswith('apple-darwin'):
+        # A cdylib defaults to its absolute output path as LC_ID_DYLIB. Set
+        # its stable runtime name at link time, preserving the ad-hoc signature.
+        return ['-C', 'link-arg=-Wl,-install_name,@rpath/liblithovm_ffi.dylib']
+    return []
+
+
 def sbom(metadata, lock):
     checksums = {(p['name'], p['version'], p.get('source')): p.get('checksum')
                  for p in lock['package']}
@@ -356,11 +372,16 @@ def build(args):
                 'RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'CARGO_TARGET_DIR', 'RUSTC_WRAPPER',
                 'RUSTC_WORKSPACE_WRAPPER', 'RUSTC', 'RUSTDOC')}
             env.update(SOURCE_DATE_EPOCH=str(epoch), CARGO_INCREMENTAL='0',
-                       CARGO_ENCODED_RUSTFLAGS='--remap-path-prefix=' + str(root) + '=/lithic')
+                       CARGO_ENCODED_RUSTFLAGS=release_rustflags(args.target, root))
             flags = ['--offline'] if args.offline else []
             run(['cargo', '+' + toolchain, 'build', '--release', '--locked', *flags,
                  '--target', args.target, '--target-dir', str(root / 'target'),
                  '-p', 'lithc', '-p', 'lithfmt', '-p', 'lithlint', '-p', 'lithovm-ffi'], cwd=root, env=env)
+            library_args = native_library_link_args(args.target)
+            if library_args:
+                run(['cargo', '+' + toolchain, 'rustc', '--release', '--locked', *flags,
+                     '--target', args.target, '--target-dir', str(root / 'target'),
+                     '-p', 'lithovm-ffi', '--lib', '--', *library_args], cwd=root, env=env)
             binaries = {dest: (root / 'target' / args.target / 'release' / name).read_bytes()
                         for name, dest in names.items()}
             builds.append(binaries)
@@ -395,6 +416,8 @@ def build(args):
              'build-evidence.json': canonical({'source_commit': commit, 'source_dirty': bool(status),
                  'source_inventory_sha256': sha(canonical(source_manifest)), 'source_date_epoch': epoch,
                  'rustc': rustc, 'target': args.target, 'independent_builds': 2,
+                 'windows_reproducible_link': args.target.endswith('windows-msvc'),
+                 'native_library_link_args': native_library_link_args(args.target),
                  'binary_hashes_equal': True, 'binary_sha256': {n: sha(raw) for n, raw in builds[0].items()},
                  'reproducibility_scope': 'same toolchain/host dependencies; distinct source and build roots',
                  'signed': False, 'production_approved': False})}

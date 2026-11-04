@@ -12,6 +12,16 @@ spec.loader.exec_module(release)
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_native_link_metadata_settings_are_platform_specific(self):
+        root=Path('/source')
+        linux=release.release_rustflags('x86_64-unknown-linux-gnu',root).split('\x1f')
+        windows=release.release_rustflags('x86_64-pc-windows-msvc',root).split('\x1f')
+        self.assertEqual(linux,['--remap-path-prefix=/source=/lithic'])
+        self.assertEqual(windows,linux+['-C','link-arg=/Brepro'])
+        self.assertEqual(release.native_library_link_args('aarch64-apple-darwin'),
+                         ['-C','link-arg=-Wl,-install_name,@rpath/liblithovm_ffi.dylib'])
+        self.assertEqual(release.native_library_link_args('x86_64-unknown-linux-gnu'),[])
+
     def test_mismatch_preserves_actual_payloads_and_never_emits_candidate(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
