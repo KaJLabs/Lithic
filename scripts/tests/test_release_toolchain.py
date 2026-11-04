@@ -16,7 +16,7 @@ class ReleaseTests(unittest.TestCase):
         root=Path('/source')
         linux=release.release_rustflags('x86_64-unknown-linux-gnu',root).split('\x1f')
         windows=release.release_rustflags('x86_64-pc-windows-msvc',root).split('\x1f')
-        self.assertEqual(linux,['--remap-path-prefix=/source=/lithic'])
+        self.assertEqual(linux,['--remap-path-prefix='+str(root)+'=/lithic'])
         self.assertEqual(windows,linux+['-C','link-arg=/Brepro'])
         self.assertEqual(release.native_library_link_args('aarch64-apple-darwin'),
                          ['-C','link-arg=-Wl,-install_name,@rpath/liblithovm_ffi.dylib'])
