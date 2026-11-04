@@ -1,0 +1,62 @@
+name: Reproducible combined release checks
+
+on:
+  push:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "packages/compiler/**"
+      - "packages/vm/**"
+      - "scripts/release_toolchain.py"
+      - "scripts/tests/test_release_toolchain.py"
+      - "sdk/tests/native-gateway-vectors.json"
+      - ".github/workflows/release-checks.yml"
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "packages/compiler/**"
+      - "packages/vm/**"
+      - "scripts/release_toolchain.py"
+      - "scripts/tests/test_release_toolchain.py"
+      - "sdk/tests/native-gateway-vectors.json"
+      - ".github/workflows/release-checks.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-14
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: rustup toolchain install 1.96.0 --profile minimal
+      - run: python -B -m unittest discover -s scripts/tests -p test_release_toolchain.py
+      - name: Build twice and exercise packaged compiler, runtime and tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -B scripts/release_toolchain.py build \
+            --version lithic-v0.2.0-production-candidate-ci \
+            --target "${{ matrix.target }}" \
+            --output "${RUNNER_TEMP}/lithic-release-check"
+      - name: Retain unsigned candidate and embedded build evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: combined-toolchain-${{ matrix.target }}
+          path: ${{ runner.temp }}/lithic-release-check/*
+          if-no-files-found: error
+          retention-days: 14

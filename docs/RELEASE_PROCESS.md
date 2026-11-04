@@ -56,6 +56,12 @@ than be waived by the packaging script.
 
 ## Reviewed GitHub release
 
+The separate `release-checks.yml` workflow runs native Linux, Windows and macOS
+rebuild comparisons and packaged execution checks for compiler/runtime PRs.
+It retains unsigned candidates with their embedded source/build/smoke evidence.
+Its read-only repository token cannot publish a GitHub release. These checks
+provide review evidence before any release tag or publication decision.
+
 1. Review the combined source changes, security findings, dependency/SBOM
    results and compatibility evidence. Resolve the remaining production gates.
 2. Authorize an annotated `lithic-v<version>` tag and the signing identity/policy.
