@@ -20,7 +20,7 @@ import tempfile
 import tomllib
 import zipfile
 
-TOOLS = ('lithc', 'lithverify', 'lithfmt', 'lithlint')
+TOOLS = ('lithc', 'lithverify', 'lithdev', 'lithfmt', 'lithlint')
 ROOT = Path(__file__).resolve().parents[1]
 SMOKE = b'''contract ReleaseSmoke {
     pub fn answer() -> u64 { return 42; }
@@ -28,7 +28,8 @@ SMOKE = b'''contract ReleaseSmoke {
 '''
 DOCS = ('README.md', 'LICENSE', 'docs/IMPLEMENTATION_STATUS.md',
         'docs/RELEASE_PROCESS.md', 'docs/LEP100_15_IMPLEMENTATION_DECISIONS.md',
-        'docs/LTH_R3_RATIFICATION_2026_10_01.md', 'docs/PRODUCTION_COMPLETION_2026_10_25.md')
+        'docs/LTH_R3_RATIFICATION_2026_10_01.md', 'docs/PRODUCTION_COMPLETION_2026_10_25.md',
+        'docs/LITHDEV_NATIVE_PREPARATION.md')
 
 
 def sha(raw):
@@ -172,6 +173,14 @@ def smoke(package_dir, names):
     compiler = package_dir / names['lithc.exe' if os.name == 'nt' else 'lithc']
     source = package_dir / 'release-smoke.lithic'
     artifact = json.loads(run([str(compiler), '--emit', 'lithovm', str(source)], cwd=package_dir))
+    dev = package_dir / names['lithdev.exe' if os.name == 'nt' else 'lithdev']
+    prepared = json.loads(run([str(dev), 'prepare-deploy', str(source), '--chain-id', '700777'], cwd=package_dir))
+    if prepared['artifact'] != artifact or prepared['executionAuthorized'] is not False:
+        raise ValueError('packaged lithdev source/artifact preparation mismatch')
+    call_intent = json.loads(run([str(dev), 'prepare-call', str(source), '--chain-id', '700777',
+        '--contract', '0x' + '11' * 20, '--function', 'answer'], cwd=package_dir))
+    if not call_intent['data'].startswith('0xcf511cf7') or call_intent['deploymentStatus'] != 'not-submitted':
+        raise ValueError('packaged lithdev call preparation mismatch')
     bytecode = bytes.fromhex(artifact['bytecode'][2:])
     library_name = next(k for k in names if 'ffi' in k)
     library = ctypes.CDLL(str(package_dir / names[library_name]))
@@ -234,6 +243,12 @@ def smoke(package_dir, names):
     expected = '0x' + (b'LVAL\x01\x00\x01\x01' + (42).to_bytes(32, 'big')).hex()
     if called.get('success') is not True or called['result'] != expected or not charges:
         raise ValueError('packaged compiler/runtime answer mismatch')
+    returned = bytes.fromhex(called['result'][2:])
+    abi_return = (32).to_bytes(32, 'big') + len(returned).to_bytes(32, 'big') + returned
+    abi_return += bytes((-len(returned)) % 32)
+    decoded = json.loads(run([str(dev), 'decode-result', '0x' + abi_return.hex()], cwd=package_dir))
+    if decoded['values'] != [{'type': 'u64', 'value': '42'}] or decoded['canonicalProofVerified'] is not False:
+        raise ValueError('packaged lithdev native-result decoding mismatch')
     failed = invoke({**call, 'function': 'missing'})
     if failed.get('success') is not False or failed['writes'] or failed['events']:
         raise ValueError('packaged runtime failure guard failed')
@@ -255,6 +270,8 @@ def smoke(package_dir, names):
     if tampered.returncode == 0:
         raise ValueError('packaged verifier accepted modified bytecode')
     return {'compiler_runtime_deploy_call': 'PASS', 'answer': 42,
+            'lithdev_unsigned_deploy_call_preparation': 'PASS',
+            'lithdev_native_result_decode': 'PASS',
             'ffi_v2_fuel_callback': 'PASS', 'invalid_call_no_effects': 'PASS',
             'source_verifier': 'PASS', 'modified_code_rejected': 'PASS',
             'source_hash': artifact['sourceHash'], 'code_hash': verified['rebuiltCodeHash'],

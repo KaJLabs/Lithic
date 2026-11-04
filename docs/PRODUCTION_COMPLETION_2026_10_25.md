@@ -4,6 +4,12 @@ Scope: standalone Lithic compiler, native runtime and release tooling. LAX token
 execution/distribution is being completed separately. Historical audit packages,
 approved node binaries and deployed services are not replaced by this work.
 
+Update 5 November: the former lithdev placeholder is replaced with native
+deployment/call intent preparation and strict gateway-result decoding. It is
+included in the reproducible release and packaged smoke. See
+[native tooling usage](LITHDEV_NATIVE_PREPARATION.md). It does not perform the
+wallet/RPC execution steps or close the standards/performance gates below.
+
 ## Completed local release milestone
 
 `scripts/release_toolchain.py` builds `lithc`, `lithverify`, `lithfmt`, `lithlint`

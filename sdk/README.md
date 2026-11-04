@@ -1,9 +1,12 @@
 # Lithic Lang Public Framework
 
-Implementation status: the compiler, formatter and linter entrypoints now invoke
+Implementation status: the compiler, formatter, linter and lithdev entrypoints invoke
 the tested Rust front end. See [current capabilities](../docs/IMPLEMENTATION_STATUS.md)
-and [command changes](../docs/FRONTEND_IMPORT.md). Contract bodies are not compiled;
-the examples below describe intended features, not deployable contracts.
+and [command changes](../docs/FRONTEND_IMPORT.md). Contract bodies in the documented
+supported subset compile to executable native bytecode. Other examples below
+include intended features and must pass the compiler before being treated as
+executable. See [native gateway preparation](../docs/LITHDEV_NATIVE_PREPARATION.md)
+for unsigned deployment/call intents; source compilation alone is not chain execution.
 
 Framework for **Lithic Lang** contract authoring, compiler/runtime design, and LEP100-aligned reference implementations.
 

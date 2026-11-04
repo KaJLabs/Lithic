@@ -1,6 +1,6 @@
 # Combined compiler and native-runtime release process
 
-The release includes `lithc`, `lithverify`, `lithfmt`, `lithlint`, the native
+The release includes `lithc`, `lithverify`, `lithdev`, `lithfmt`, `lithlint`, the native
 `lithovm-ffi` shared library and its C header. All are built from one source
 snapshot with the exact Rust version in `rust-toolchain.toml` and `Cargo.lock`.
 Python 3.11 or newer, git and the platform's Rust/native linker are required.
@@ -21,12 +21,14 @@ the resulting build evidence records that state and a hash of every source
 input. It must not be represented as a release from the clean Git commit.
 
 The script builds twice in independent source/target directories with path
-remapping and a source-commit timestamp. It compares all five executable/library
+remapping and a source-commit timestamp. It compares all six executable/library
 payloads byte-for-byte and fails without emitting an archive on any difference.
 It then runs the packaged compiler and native FFI v2 together: compile a small
 contract, deploy into callback-backed local state, call and verify the result,
 check live fuel callbacks and reject an invalid call without durable effects.
 The packaged `lithverify` rebuilds that exact source and rejects modified code.
+The packaged `lithdev` prepares native deployment/call intents from the same
+source and artifact; see [its usage and boundaries](LITHDEV_NATIVE_PREPARATION.md).
 This smoke never registers a chain service, signs a transaction or uses LAX.
 
 The archive includes deterministic metadata, a complete file/hash manifest,

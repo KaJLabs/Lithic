@@ -32,11 +32,12 @@ class ReleaseTests(unittest.TestCase):
                 self.assertEqual(release.verify_archive(first)['target'], target)
 
     def test_missing_runtime_or_verifier_and_modified_payload_rejected(self):
-        for mutation in ('runtime', 'verifier', 'modified', 'extra'):
+        for mutation in ('runtime', 'verifier', 'devtools', 'modified', 'extra'):
             with self.subTest(mutation=mutation):
                 files = self.files('x86_64-unknown-linux-gnu')
-                if mutation in ('runtime', 'verifier'):
-                    name = 'lib/liblithovm_ffi.so' if mutation == 'runtime' else 'bin/lithverify'
+                if mutation in ('runtime', 'verifier', 'devtools'):
+                    name = {'runtime': 'lib/liblithovm_ffi.so', 'verifier': 'bin/lithverify',
+                            'devtools': 'bin/lithdev'}[mutation]
                     del files[name]
                     manifest = json.loads(files['manifest.json'])
                     del manifest['files'][name]
