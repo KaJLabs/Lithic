@@ -2,6 +2,12 @@
 
 Verified: 2026-09-26
 
+This is the historical preview.3 baseline and September candidate assessment.
+For the current capability gaps, native-platform release results and remaining
+production gates, use the [completion record updated 5 November](PRODUCTION_COMPLETION_2026_10_25.md).
+In particular, the September network-availability and release-tooling states
+below must not be presented as the current implementation status.
+
 Baseline: annotated tag `lithic-v0.2.0-preview.3` at
 `b5547d408d7f461d285402f6329090940d54eeae`. The tag itself has no Git
 signature. GitHub Actions run `35652881357` succeeded and its Linux archive
