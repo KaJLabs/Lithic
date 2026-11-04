@@ -1,3 +1,4 @@
+* text=auto eol=lf
 *.sh text eol=lf
 sdk/tooling/bin/* text eol=lf
 *.rs text eol=lf

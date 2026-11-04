@@ -2,6 +2,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -12,6 +13,58 @@ spec.loader.exec_module(release)
 
 
 class ReleaseTests(unittest.TestCase):
+    def source_repo(self, directory):
+        root = Path(directory) / 'source'
+        root.mkdir()
+        subprocess.run(['git', 'init', str(root)], check=True, capture_output=True)
+        for name in ('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml'):
+            (root / name).write_bytes(b'canonical = "input"\n')
+        (root / 'fixture.bin').write_bytes(b'\x00binary\r\n')
+        return root
+
+    def commit_source(self, root):
+        subprocess.run(['git', '-c', 'core.autocrlf=false', 'add', '.'],
+                       cwd=root, check=True, capture_output=True)
+        subprocess.run(['git', '-c', 'user.name=Release Test',
+                        '-c', 'user.email=release-test@example.invalid',
+                        '-c', 'commit.gpgsign=false', 'commit', '-m', 'fixture'],
+                       cwd=root, check=True, capture_output=True)
+
+    def test_clean_crlf_checkout_cannot_claim_raw_git_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.source_repo(directory)
+            self.commit_source(root)
+            clone = Path(directory) / 'transformed-checkout'
+            subprocess.run(['git', '-c', 'core.autocrlf=true', 'clone', str(root), str(clone)],
+                           check=True, capture_output=True)
+            self.assertEqual((clone / 'Cargo.lock').read_bytes(), b'canonical = "input"\r\n')
+            self.assertEqual(release.run(['git', 'status', '--porcelain'], cwd=clone), b'')
+            with self.assertRaisesRegex(ValueError, 'noncanonical source bytes: Cargo.lock'):
+                release.source_snapshot(clone)
+
+    def test_raw_git_source_policy_preserves_binary_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.source_repo(directory)
+            self.commit_source(root)
+            source = release.source_snapshot(root)
+            self.assertEqual(source['fixture.bin'], b'\x00binary\r\n')
+            self.assertEqual(source['Cargo.lock'], b'canonical = "input"\n')
+
+    def test_lf_checkout_policy_overrides_autocrlf_and_preserves_fuzz_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.source_repo(directory)
+            (root / '.gitattributes').write_bytes((release.ROOT / '.gitattributes').read_bytes())
+            fuzz = root / 'fuzz/corpus/child_creation/seed'
+            fuzz.parent.mkdir(parents=True)
+            fuzz.write_bytes(b'fuzz bytes\r\n')
+            self.commit_source(root)
+            clone = Path(directory) / 'windows-checkout'
+            subprocess.run(['git', '-c', 'core.autocrlf=true', 'clone', str(root), str(clone)],
+                           check=True, capture_output=True)
+            self.assertEqual(release.source_snapshot(root), release.source_snapshot(clone))
+            self.assertEqual((clone / 'Cargo.lock').read_bytes(), b'canonical = "input"\n')
+            self.assertEqual((clone / 'fuzz/corpus/child_creation/seed').read_bytes(), b'fuzz bytes\r\n')
+
     def test_native_link_metadata_settings_are_platform_specific(self):
         root=Path('/source')
         linux=release.release_rustflags('x86_64-unknown-linux-gnu',root).split('\x1f')

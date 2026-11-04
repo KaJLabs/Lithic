@@ -20,6 +20,14 @@ is rejected unless `--allow-dirty` is explicitly supplied for a local candidate;
 the resulting build evidence records that state and a hash of every source
 input. It must not be represented as a release from the clean Git commit.
 
+Clean releases use the `raw-git-blobs-v1` input policy: every input must match
+its raw Git blob in `HEAD`, including its bytes and the complete file inventory.
+Text checkouts use LF on every platform through `.gitattributes`; explicitly
+binary fixtures remain byte-preserved. A clean Git status alone is insufficient:
+the packager rejects checkout conversions before compiling. Build evidence records
+the exact source commit, tree and policy. Dirty local candidates are labelled
+`working-tree-local-v1` and `source_matches_commit: false`.
+
 The script builds twice in independent source/target directories with path
 remapping and a source-commit timestamp. It compares all six executable/library
 payloads byte-for-byte and fails without emitting an archive on any difference.
@@ -65,6 +73,9 @@ than be waived by the packaging script.
 The separate `release-checks.yml` workflow runs native Linux, Windows and macOS
 rebuild comparisons and packaged execution checks for compiler/runtime PRs.
 It retains unsigned candidates with their embedded source/build/smoke evidence.
+PR builds check out the selected head commit directly, rather than a synthetic
+CI merge. The review packet must include that exact build commit and its tree
+and parents in the Git bundle, alongside the outer archive checksum sidecar.
 Its read-only repository token cannot publish a GitHub release. These checks
 provide review evidence before any release tag or publication decision.
 

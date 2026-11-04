@@ -3,6 +3,7 @@ name: Reproducible combined release checks
 on:
   pull_request:
     paths:
+      - ".gitattributes"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
@@ -32,6 +33,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - run: rustup toolchain install 1.96.0 --profile minimal
       - run: python -B -m unittest discover -s scripts/tests -p test_release_toolchain.py
       - name: Build twice and exercise packaged compiler, runtime and tools

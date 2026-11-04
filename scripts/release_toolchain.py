@@ -68,7 +68,7 @@ def artifact_names(target):
     raise ValueError('unsupported release target')
 
 
-def source_snapshot(root):
+def source_snapshot(root, *, allow_dirty=False):
     listing = run(['git', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], cwd=root)
     files = {}
     for encoded in listing.split(b'\0'):
@@ -83,6 +83,24 @@ def source_snapshot(root):
         files[name] = path.read_bytes()
     if not {'Cargo.lock', 'Cargo.toml', 'rust-toolchain.toml'} <= set(files):
         raise ValueError('incomplete source snapshot')
+    if not allow_dirty:
+        expected = {}
+        listing = run(['git', 'ls-tree', '-rz', '--full-tree', 'HEAD'], cwd=root)
+        for entry in listing.split(b'\0'):
+            if not entry:
+                continue
+            metadata, name = entry.split(b'\t', 1)
+            mode, kind, oid = metadata.split()
+            if kind != b'blob' or mode == b'120000':
+                raise ValueError('nonregular committed source input: ' + name.decode('utf-8'))
+            expected[safe_name(name.decode('utf-8'))] = oid.decode('ascii')
+        if set(files) != set(expected):
+            raise ValueError('source inventory differs from committed tree')
+        algorithm = run(['git', 'rev-parse', '--show-object-format'], cwd=root).decode().strip()
+        for name, raw in files.items():
+            blob = b'blob ' + str(len(raw)).encode('ascii') + b'\0' + raw
+            if hashlib.new(algorithm, blob).hexdigest() != expected[name]:
+                raise ValueError('noncanonical source bytes: ' + name)
     return files
 
 
@@ -346,8 +364,9 @@ def build(args):
     status = run(['git', 'status', '--porcelain=v1'], cwd=ROOT).decode()
     if status and not args.allow_dirty:
         raise ValueError('source checkout is dirty; local candidates require --allow-dirty')
-    source = source_snapshot(ROOT)
+    source = source_snapshot(ROOT, allow_dirty=bool(status))
     commit = run(['git', 'rev-parse', 'HEAD']).decode().strip()
+    source_tree = run(['git', 'rev-parse', 'HEAD^{tree}']).decode().strip()
     epoch = int(run(['git', 'show', '-s', '--format=%ct', 'HEAD']).strip())
     toolchain = tomllib.loads(source['rust-toolchain.toml'].decode())['toolchain']['channel']
     if not re.fullmatch(r'\d+\.\d+\.\d+', toolchain):
@@ -405,8 +424,10 @@ def build(args):
         smoke_result = json.loads(run([sys.executable, str(Path(__file__).resolve()),
             'smoke', '--directory', str(package), '--target', args.target], cwd=package))
     # Never substitute a snapshot if the user edited sources while builds ran.
-    if source_snapshot(ROOT) != source:
+    if source_snapshot(ROOT, allow_dirty=bool(status)) != source:
         raise ValueError('source changed during build; candidate not emitted')
+    if run(['git', 'rev-parse', 'HEAD']).decode().strip() != commit:
+        raise ValueError('source commit changed during build; candidate not emitted')
     source_manifest = {n: {'bytes': len(raw), 'sha256': sha(raw)} for n, raw in sorted(source.items())}
     files = {**builds[0], 'release-smoke.lithic': SMOKE,
              'include/lithovm.h': source['packages/vm/lithovm-ffi/include/lithovm.h'],
@@ -414,6 +435,8 @@ def build(args):
              'sbom.cdx.json': canonical(sbom(metadata, tomllib.loads(source['Cargo.lock'].decode()))),
              'smoke-evidence.json': canonical(smoke_result),
              'build-evidence.json': canonical({'source_commit': commit, 'source_dirty': bool(status),
+                 'source_tree': source_tree, 'source_matches_commit': not bool(status),
+                 'source_input_policy': 'working-tree-local-v1' if status else 'raw-git-blobs-v1',
                  'source_inventory_sha256': sha(canonical(source_manifest)), 'source_date_epoch': epoch,
                  'rustc': rustc, 'target': args.target, 'independent_builds': 2,
                  'windows_reproducible_link': args.target.endswith('windows-msvc'),
