@@ -60,3 +60,11 @@ jobs:
           path: ${{ runner.temp }}/lithic-release-check/*
           if-no-files-found: error
           retention-days: 14
+      - name: Retain failing rebuilds for metadata diagnosis
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: failed-rebuild-${{ matrix.target }}
+          path: ${{ runner.temp }}/lithic-release-check-failed-rebuild/**
+          if-no-files-found: ignore
+          retention-days: 14

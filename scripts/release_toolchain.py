@@ -139,6 +139,47 @@ def archive_bytes(files, epoch, windows=False):
     return buffer.getvalue()
 
 
+def preserve_rebuild_failure(builds, roots, output, target, commit):
+    """Retain actual failing payloads and metadata instead of deleting the repro."""
+    destination = output.with_name(output.name + '-failed-rebuild')
+    destination.mkdir(parents=True)
+    differences = {}
+    for name in builds[0]:
+        left, right = builds[0][name], builds[1][name]
+        if left == right:
+            continue
+        first = next((i for i, (a, b) in enumerate(zip(left, right)) if a != b), min(len(left), len(right)))
+        row = {'first_difference': first, 'lengths': [len(left), len(right)],
+               'sha256': [sha(left), sha(right)], 'metadata': []}
+        for index, raw in enumerate((left, right)):
+            path = destination / ('build-' + str(index)) / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(raw)
+            metadata = {'embedded_build_root': any(pattern in raw for pattern in (
+                str(roots[index]).encode(), str(roots[index]).replace('\\', '/').encode(),
+                str(roots[index]).encode('utf-16-le')))}
+            if raw[:2] == b'MZ' and len(raw) >= 64:
+                pe = int.from_bytes(raw[60:64], 'little')
+                if raw[pe:pe + 4] == b'PE\0\0':
+                    metadata['coff_timestamp'] = int.from_bytes(raw[pe + 8:pe + 12], 'little')
+                pos = raw.find(b'RSDS')
+                if pos >= 0:
+                    metadata['codeview_guid_age'] = raw[pos + 4:pos + 24].hex()
+                    metadata['pdb_path'] = raw[pos + 24:].split(b'\0', 1)[0].decode(errors='replace')
+            if target.endswith('apple-darwin'):
+                try:
+                    inspection = subprocess.run(['/usr/bin/otool', '-l', str(path)], capture_output=True, timeout=15)
+                    (path.with_name(path.name + '.otool.txt')).write_bytes(inspection.stdout + inspection.stderr)
+                    metadata['otool_exit'] = inspection.returncode
+                except (OSError, subprocess.TimeoutExpired) as error:
+                    metadata['otool_error'] = type(error).__name__
+            row['metadata'].append(metadata)
+        differences[name] = row
+    (destination / 'FAILED_REBUILD.json').write_bytes(canonical({
+        'status': 'FAILED_REBUILD_NOT_A_RELEASE', 'source_commit': commit,
+        'target': target, 'differences': differences}))
+
+
 def verify_archive(raw):
     files = {}
     if raw.startswith(b'PK'):
@@ -300,11 +341,12 @@ def build(args):
     if args.target != host:
         raise ValueError('release smoke must run on its native target host')
     names = artifact_names(args.target)
-    builds = []
+    builds, roots = [], []
     with tempfile.TemporaryDirectory(prefix='lithic-release-') as directory:
         temporary = Path(directory)
         for index in range(2):
             root = temporary / ('independent-' + str(index))
+            roots.append(root)
             root.mkdir()
             for name, raw in source.items():
                 path = root / name
@@ -326,6 +368,7 @@ def build(args):
                 metadata = json.loads(run(['cargo', '+' + toolchain, 'metadata', '--locked',
                     '--format-version', '1', '--filter-platform', args.target, *flags], cwd=root, env=env))
         if builds[0] != builds[1]:
+            preserve_rebuild_failure(builds, roots, output, args.target, commit)
             changed = [name for name in builds[0] if builds[0][name] != builds[1][name]]
             raise ValueError('independent rebuild byte mismatch: ' + ', '.join(changed))
         package = temporary / 'package'

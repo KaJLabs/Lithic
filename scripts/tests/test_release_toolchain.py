@@ -3,6 +3,7 @@ import io
 import json
 from pathlib import Path
 import tarfile
+import tempfile
 import unittest
 
 spec = importlib.util.spec_from_file_location('release_toolchain', Path(__file__).parents[1] / 'release_toolchain.py')
@@ -11,6 +12,21 @@ spec.loader.exec_module(release)
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_mismatch_preserves_actual_payloads_and_never_emits_candidate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / 'candidate'
+            builds = [{'bin/lithc': b'first', 'lib/runtime': b'same'},
+                      {'bin/lithc': b'second', 'lib/runtime': b'same'}]
+            release.preserve_rebuild_failure(builds, [root/'one', root/'two'],output,'linux','test-commit')
+            diagnostic = root/'candidate-failed-rebuild'
+            self.assertFalse(output.exists())
+            self.assertEqual((diagnostic/'build-0/bin/lithc').read_bytes(),b'first')
+            self.assertEqual((diagnostic/'build-1/bin/lithc').read_bytes(),b'second')
+            record=json.loads((diagnostic/'FAILED_REBUILD.json').read_bytes())
+            self.assertEqual(record['status'],'FAILED_REBUILD_NOT_A_RELEASE')
+            self.assertEqual(set(record['differences']),{'bin/lithc'})
+
     def files(self, target):
         names = set(release.artifact_names(target).values()) | {
             'include/lithovm.h', 'sbom.cdx.json', 'Cargo.lock', 'source-manifest.json',
