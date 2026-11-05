@@ -9,7 +9,8 @@ The envelope is `LVAL` followed by version byte 1 and a big-endian u16 value
 count. Each value starts with a one-byte tag. Tags 1 through 5 retain the
 existing scalar types and their canonical 32-byte words. Tag 6 denotes a
 string: big-endian u16 byte length followed by exactly that many UTF-8 bytes.
-No padding, trailing bytes, unknown tags or alternative versions are accepted.
+No padding, trailing bytes or unknown tags are accepted. The binary-value
+extension below defines the only additional envelope version.
 Strings preserve embedded NUL, combining marks and all valid UTF-8 without
 normalization or truncation. Empty strings are permitted.
 
@@ -70,3 +71,56 @@ approved collection profile; ordered
 synchronous calls and contract creation; persistent chain/gateway and RPC
 integration; independent review and Makalu acceptance. No native deployment
 availability or production readiness is established by these local tests.
+
+## Binary values and runtime hashing candidate (2026-11-06)
+
+The compiler, VM, transactional host and local FFI support bounded `bytes`
+parameters, returns, locals, equality, event fields and synchronous call
+arguments/results. `keccak256(data)` accepts one `bytes` operand and returns
+`bytes32`. It hashes the exact binary payload, including embedded NUL and
+non-UTF-8 bytes, using Keccak-256 rather than SHA3-256. Existing compile-time
+`keccak256("literal")` constants keep their behavior.
+
+These programs require bytecode **v15**, target `lithovm-native-v15`, value type
+tag 7 and hash instruction opcode 20. Version selection includes nested blocks,
+typed call results and unused event schemas. Downgraded headers reject the new
+types/instruction. This VM format number does not imply LEP100-15 conformance.
+V15 uses the hosted execution mode introduced by v13; the typed transactional
+host supplies that mode, including for pure binary/hash entrypoints. Deferred
+`call_contract` cannot be mixed into v15 programs. Existing v1-v14 programs
+retain their encoding and execution rules.
+
+An envelope containing a binary value uses `LVAL`, version byte 2, and the same
+big-endian u16 count. Tag 7 is followed by a big-endian u16 byte length and the
+exact bytes. Other values retain their existing tags and encoding. V2 without
+a binary value is rejected, as is tag 7 in v1. Envelopes without binary values
+continue to use v1, so every accepted envelope has a unique canonical encoding.
+For example binary `[0x00, 0xff, 0x80]` followed by string `A` encodes as
+`4c56414c02000207000300ff8006000141`.
+
+Candidate bounds remain 64 values and 65,536 encoded bytes in aggregate, with
+at most 4,096 bytes per binary value. The existing cumulative event budget also
+counts binary payload bytes, tags and headers. Bounds are checked before
+argument/return copying; out-of-gas and explicit revert discard state, events
+and nested effects. Binary storage, binary map keys/values, source literals,
+concatenation, indexing, general arrays and signature verification remain
+unsupported and do not gain semantics from this change.
+
+Candidate copy/equality charges follow string byte charging. Hashing adds
+`30 + 6 * ceil(payload_bytes / 32)` gas plus the existing instruction charge,
+before hashing; the live external fuel sink receives the same charge. This is
+a local test schedule, not approved production pricing or a gas-cap decision.
+
+Tests exercise independent empty/`abc` Keccak vectors, arbitrary binary and
+maximum-sized values, canonical/truncated/malformed ABI inputs, version
+downgrades, typed nested calls, event limits, persisted hash-state reload
+through the C ABI, external fuel and every insufficient gas budget of a
+representative stateful hash call. The `binary_values` fuzz target checks
+deterministic execution/replay and transaction rollback across binary inputs,
+gas budgets, rejection and revert cases.
+
+`lithdev` can decode binary results, but rejects preparing deploy/call intents
+for v15 against its documented Makalu v14 profile. No reviewed node binary,
+runtime library, diagnostic pin, deployed contract or standard is replaced.
+The LEP100-15 signing proposal remains subject to the maintainers' decision;
+native account behavior and security/production acceptance remain separate.

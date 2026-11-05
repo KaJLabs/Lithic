@@ -100,6 +100,13 @@ fn argument(value: &Argument) -> Result<Value, String> {
             input.as_str().ok_or("string value required")?.into(),
         ));
     }
+    if ty == "bytes" {
+        let data = unhex(input.as_str().ok_or("hex string required")?, None)?;
+        if data.len() > values::MAX_BYTES_LENGTH {
+            return Err("bytes exceeds ABI byte limit".into());
+        }
+        return Ok(Value::Bytes(data));
+    }
     let (kind, word) = match ty {
         "u64" | "u256" => (
             if ty == "u64" {
@@ -211,6 +218,13 @@ fn prepare(command: &str, source: &str, flags: &BTreeMap<String, String>) -> Res
         return Err("explicit --chain-id 700777 required for the documented Makalu profile".into());
     }
     let artifact = compile(source).map_err(|e| e.to_string())?;
+    let program =
+        lithovm_bytecode::parse(&unhex(&artifact.bytecode, None)?).map_err(|e| e.to_string())?;
+    if program.bytecode_version() > lithovm_bytecode::CREATE_VERSION {
+        return Err(
+            "source requires a newer native runtime than the documented Makalu v14 profile".into(),
+        );
+    }
     let args: Vec<Argument> = match flags.get("--args") {
         Some(path) => serde_json::from_str(&read_file(path)?).map_err(|e| e.to_string())?,
         None => vec![],
@@ -293,6 +307,7 @@ fn decode_result(encoded: &str) -> Result<Json, String> {
         .iter()
         .map(|value| match value {
             Value::String(s) => json!({"type":"string","value":s}),
+            Value::Bytes(data) => json!({"type":"bytes","value":format!("0x{}",hex::encode(data))}),
             Value::Word(ty, w) => match ty {
                 ValueType::U64 => json!({"type":"u64","value":decimal(*w)}),
                 ValueType::U256 => json!({"type":"u256","value":decimal(*w)}),
@@ -303,7 +318,9 @@ fn decode_result(encoded: &str) -> Result<Json, String> {
                 ValueType::Bytes32 => {
                     json!({"type":"bytes32","value":format!("0x{}",hex::encode(w))})
                 }
-                ValueType::String => unreachable!("string is a separate native value variant"),
+                ValueType::String | ValueType::Bytes => {
+                    unreachable!("dynamic values have separate native variants")
+                }
             },
         })
         .collect();
@@ -561,6 +578,43 @@ mod tests {
                 "700777".into(),
             ];
             assert!(run(&args).unwrap_err().contains("option"));
+        }
+    }
+
+    #[test]
+    fn binary_abi_is_strict_and_new_runtime_cannot_prepare_old_chain_intents() {
+        let entry = EntrypointArtifact {
+            name: "echo".into(),
+            signature: "echo(bytes)".into(),
+            selector: String::new(),
+        };
+        let encoded = encode_arguments(&entry, &[arg("bytes", json!("0x00ff80"))]).unwrap();
+        assert_eq!(
+            values::decode(&encoded).unwrap(),
+            [Value::Bytes(vec![0, 255, 128])]
+        );
+        for invalid in [
+            json!("0x0"),
+            json!("0xgg"),
+            json!("ff"),
+            json!([0, 255]),
+            json!(format!("0x{}", "ff".repeat(4097))),
+        ] {
+            assert!(encode_arguments(&entry, &[arg("bytes", invalid)]).is_err());
+        }
+        let mut result = word(32).to_vec();
+        result.extend(dynamic(&encoded));
+        let decoded = decode_result(&format!("0x{}", hex::encode(result))).unwrap();
+        assert_eq!(
+            decoded["values"][0],
+            json!({"type":"bytes","value":"0x00ff80"})
+        );
+        let source = "contract Binary { pub fn echo(data: bytes) -> bytes { return data; } }";
+        let flags = BTreeMap::from([("--chain-id".into(), "700777".into())]);
+        for command in ["prepare-deploy", "prepare-call"] {
+            assert!(prepare(command, source, &flags)
+                .unwrap_err()
+                .contains("Makalu v14 profile"));
         }
     }
 

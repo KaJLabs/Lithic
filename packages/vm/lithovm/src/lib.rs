@@ -1,10 +1,11 @@
 use anyhow::{anyhow, bail, Result};
-use lithovm_bytecode::values::{self, Value, MAX_STRING_BYTES};
+use lithovm_bytecode::values::{self, Value, MAX_BYTES_LENGTH, MAX_STRING_BYTES};
 use lithovm_bytecode::{
     parse, validate_word, Instruction, Program, ReturnValue, Statement, ValueType,
 };
 use lithovm_receipts::ReceiptV1;
 use lithovm_zk_verifier::{StubVerifier, ZkVerifier};
+use sha3::{Digest, Keccak256};
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
@@ -510,10 +511,7 @@ impl Vm {
                 bail!("argument count mismatch");
             }
             for (ty, value) in function.parameters.iter().zip(arguments) {
-                let actual = match value {
-                    Value::Word(ty, _) => *ty,
-                    Value::String(_) => ValueType::String,
-                };
+                let actual = value.value_type();
                 if *ty != actual {
                     bail!("argument type mismatch");
                 }
@@ -522,10 +520,7 @@ impl Vm {
                 + PARAMETER_GAS * arguments.len() as u64
                 + arguments
                     .iter()
-                    .map(|value| match value {
-                        Value::String(text) => text.len() as u64,
-                        _ => 0,
-                    })
+                    .map(|value| value.byte_len() as u64)
                     .sum::<u64>();
             if gas_limit < initial_cost {
                 charge_external_fuel(gas_limit);
@@ -617,7 +612,7 @@ fn execute_program(
     )?;
     let scalar = |value| match value {
         Value::Word(_, word) => Ok(word),
-        Value::String(_) => Err(anyhow!("dynamic value in scalar execution")),
+        Value::String(_) | Value::Bytes(_) => Err(anyhow!("dynamic value in scalar execution")),
     };
     Ok(ExecutionResult {
         return_type: result.return_type,
@@ -673,6 +668,10 @@ fn execute_dynamic_program(
         if let Some(text) = &value.text {
             if text.len() > MAX_STRING_BYTES {
                 bail!("string exceeds ABI byte limit");
+            }
+        } else if let Some(data) = &value.bytes {
+            if data.len() > MAX_BYTES_LENGTH {
+                bail!("bytes exceeds ABI byte limit");
             }
         } else {
             validate_word(*value_type, &value.word)?;
@@ -853,6 +852,7 @@ struct StackValue {
     value_type: ValueType,
     word: [u8; 32],
     text: Option<Arc<str>>,
+    bytes: Option<Arc<[u8]>>,
 }
 
 impl StackValue {
@@ -861,6 +861,7 @@ impl StackValue {
             value_type,
             word,
             text: None,
+            bytes: None,
         }
     }
 
@@ -871,19 +872,28 @@ impl StackValue {
                 value_type: ValueType::String,
                 word: [0; 32],
                 text: Some(Arc::from(text.as_str())),
+                bytes: None,
+            },
+            Value::Bytes(data) => Self {
+                value_type: ValueType::Bytes,
+                word: [0; 32],
+                text: None,
+                bytes: Some(Arc::from(data.as_slice())),
             },
         }
     }
 
     fn into_value(self) -> Value {
-        match self.text {
-            Some(text) => Value::String(text.to_string()),
-            None => Value::Word(self.value_type, self.word),
+        match (self.text, self.bytes) {
+            (Some(text), _) => Value::String(text.to_string()),
+            (_, Some(data)) => Value::Bytes(data.to_vec()),
+            _ => Value::Word(self.value_type, self.word),
         }
     }
 
     fn byte_cost(&self) -> u64 {
         self.text.as_ref().map_or(0, |text| text.len() as u64)
+            + self.bytes.as_ref().map_or(0, |data| data.len() as u64)
     }
 }
 
@@ -980,6 +990,7 @@ fn evaluate_expression(
                         value_type: ValueType::String,
                         word: [0; 32],
                         text: Some(text.clone()),
+                        bytes: None,
                     });
                     continue;
                 }
@@ -1074,7 +1085,11 @@ fn evaluate_expression(
                 meter.charge(left.byte_cost().saturating_add(right.byte_cost()))?;
                 stack.push(StackValue::scalar(
                     ValueType::Bool,
-                    word_from_bool(left.word == right.word && left.text == right.text),
+                    word_from_bool(
+                        left.word == right.word
+                            && left.text == right.text
+                            && left.bytes == right.bytes,
+                    ),
                 ));
             }
             Instruction::LtU64 => {
@@ -1104,6 +1119,21 @@ fn evaluate_expression(
                 stack.push(StackValue::scalar(
                     ValueType::Bool,
                     word_from_bool(left >= right),
+                ));
+            }
+            Instruction::Keccak256 => {
+                let value = stack
+                    .pop()
+                    .ok_or_else(|| anyhow!("expression stack underflow"))?;
+                let data = value
+                    .bytes
+                    .ok_or_else(|| anyhow!("keccak256 requires bytes"))?;
+                // Candidate schedule only. Charge before hashing; the shared fuel
+                // hook sees the same charge as the transaction-local meter.
+                meter.charge(30 + 6 * (data.len() as u64).div_ceil(32))?;
+                stack.push(StackValue::scalar(
+                    ValueType::Bytes32,
+                    Keccak256::digest(data.as_ref()).into(),
                 ));
             }
         }
@@ -1361,9 +1391,7 @@ fn execute_block(
                     }
                 };
                 values::encoded_size(std::slice::from_ref(&returned.value))?;
-                if let Value::String(text) = &returned.value {
-                    meter.charge(text.len() as u64)?;
-                }
+                meter.charge(returned.value.byte_len() as u64)?;
                 let returned_value = StackValue::from_value(&returned.value);
                 if returned_value.value_type != *return_type {
                     bail!("invoke return type mismatch");
@@ -1575,7 +1603,7 @@ fn execute_block(
                     if value.value_type != field.value_type {
                         bail!("event field runtime type mismatch");
                     }
-                    if value.text.is_some() {
+                    if value.text.is_some() || value.bytes.is_some() {
                         event_bytes += 3 + value.byte_cost() as usize;
                     } else {
                         event_bytes += 33;

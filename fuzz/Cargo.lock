@@ -182,6 +182,7 @@ dependencies = [
  "lithovm-zk-verifier",
  "serde",
  "serde_json",
+ "sha3",
 ]
 
 [[package]]

@@ -52,3 +52,10 @@ path = "fuzz_targets/child_creation.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "binary_values"
+path = "fuzz_targets/binary_values.rs"
+test = false
+doc = false
+bench = false

@@ -33,6 +33,13 @@ adapter and evidence. The EVM target remains documented in
 
 ## Local development
 
+The separate [v15 binary/hash candidate](LITHOVM_DYNAMIC_VALUES_V1.md#binary-values-and-runtime-hashing-candidate-2026-11-06)
+adds bounded `bytes` values and runtime `keccak256(bytes)` across compiler, VM,
+typed host and local FFI. It preserves v1-v14 behavior and rejects preparing
+v15 intents for the documented Makalu v14 profile. Binary storage, arrays,
+signature verification and the native LEP100-15 account remain unimplemented.
+This work does not replace the reviewed release or deployed runtime.
+
 The local [v12 string candidate](LITHOVM_DYNAMIC_VALUES_V1.md) additionally
 compiles and executes string parameters, locals, scalar storage, events,
 equality and returns through the explicit dynamic-value VM API. It includes

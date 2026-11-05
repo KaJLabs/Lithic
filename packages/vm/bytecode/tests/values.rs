@@ -4,6 +4,44 @@ use lithovm_bytecode::{
 };
 
 #[test]
+fn binary_v2_wire_format_is_canonical_and_preserves_non_utf8() {
+    let values = vec![Value::Bytes(vec![0, 255, 128]), Value::String("A".into())];
+    let wire = hex::decode("4c56414c02000207000300ff8006000141").unwrap();
+    assert_eq!(encode(&values).unwrap(), wire);
+    assert_eq!(decode(&wire).unwrap(), values);
+    for end in 0..wire.len() {
+        assert!(decode(&wire[..end]).is_err());
+    }
+    let mut v1 = wire.clone();
+    v1[4] = 1;
+    assert!(decode(&v1).is_err());
+    let mut trailing = wire;
+    trailing.push(0);
+    assert!(decode(&trailing).is_err());
+    for data in [
+        vec![],
+        vec![255; lithovm_bytecode::values::MAX_BYTES_LENGTH],
+    ] {
+        let values = [Value::Bytes(data)];
+        assert_eq!(decode(&encode(&values).unwrap()).unwrap(), values);
+    }
+    assert!(encode(&[Value::Bytes(vec![0; 4097])]).is_err());
+    assert!(encode(&vec![Value::Bytes(vec![0; 4096]); 16]).is_err());
+    assert!(encode(&[Value::Word(ValueType::Bytes, [0; 32])]).is_err());
+    assert!(decode(&hex::decode("4c56414c020000").unwrap()).is_err());
+    assert!(decode(&hex::decode("4c56414c020001071001").unwrap()).is_err());
+    let mut oversized = b"LVAL\x02\x00\x01\x07\x10\x01".to_vec();
+    oversized.extend(vec![0; 4097]);
+    assert!(decode(&oversized).is_err());
+    // Existing v1 encodings remain byte-identical, including an empty envelope.
+    assert_eq!(encode(&[]).unwrap(), b"LVAL\x01\x00\x00");
+    assert_eq!(
+        encode(&[Value::String("A".into())]).unwrap(),
+        hex::decode("4c56414c01000106000141").unwrap()
+    );
+}
+
+#[test]
 fn matches_independent_utf8_wire_vector() {
     // LVAL, version 1, two values: string "Aé", string "".
     let bytes = hex::decode("4c56414c01000206000341c3a9060000").unwrap();

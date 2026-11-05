@@ -563,6 +563,7 @@ impl HostValue for Value {
         match value {
             Value::Word(_, _) => 33,
             Value::String(text) => 3 + text.len(),
+            Value::Bytes(data) => 3 + data.len(),
         }
     }
     fn execute(

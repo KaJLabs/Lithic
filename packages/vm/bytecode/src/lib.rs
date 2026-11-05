@@ -18,6 +18,8 @@ pub const VERSION: u8 = 11;
 pub const STRING_VERSION: u8 = 12;
 pub const SYNC_VERSION: u8 = 13;
 pub const CREATE_VERSION: u8 = 14;
+/// Binary values and runtime hashing; not accepted by the v14 chain profile.
+pub const BYTES_VERSION: u8 = 15;
 pub const MAX_FUNCTIONS: usize = 1024;
 pub const MAX_PARAMETERS: usize = 64;
 pub const MAX_NAME_BYTES: usize = 255;
@@ -37,6 +39,7 @@ pub enum ValueType {
     Address = 4,
     Bytes32 = 5,
     String = 6,
+    Bytes = 7,
 }
 
 impl ValueType {
@@ -48,6 +51,7 @@ impl ValueType {
             4 => Ok(Self::Address),
             5 => Ok(Self::Bytes32),
             6 => Ok(Self::String),
+            7 => Ok(Self::Bytes),
             _ => bail!("unknown LithoVM value type {value}"),
         }
     }
@@ -60,6 +64,7 @@ impl ValueType {
             Self::Address => "address",
             Self::Bytes32 => "bytes32",
             Self::String => "string",
+            Self::Bytes => "bytes",
         }
     }
 }
@@ -157,6 +162,7 @@ pub enum Instruction {
     AddU256,
     SubU256,
     GteU256,
+    Keccak256,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -219,6 +225,22 @@ struct ValidationSchema<'a> {
 
 impl Program {
     pub fn bytecode_version(&self) -> u8 {
+        if self
+            .events
+            .iter()
+            .any(|e| e.fields.iter().any(|f| f.value_type == ValueType::Bytes))
+            || self.functions.iter().any(|f| {
+                f.return_type == ValueType::Bytes
+                    || f.parameters.contains(&ValueType::Bytes)
+                    || match &f.return_value {
+                        ReturnValue::Expression(code) => code.contains(&Instruction::Keccak256),
+                        ReturnValue::Statements(body) => requires_bytes(body),
+                        _ => false,
+                    }
+            })
+        {
+            return BYTES_VERSION;
+        }
         if self.functions.iter().any(|f| {
             matches!(&f.return_value,
             ReturnValue::Statements(body) if contains_creation(body))
@@ -317,7 +339,7 @@ pub fn parse(bytes: &[u8]) -> Result<Program> {
         bail!("invalid LithoVM bytecode magic");
     }
     let version = reader.byte()?;
-    if !(LEGACY_VERSION..=CREATE_VERSION).contains(&version) {
+    if !(LEGACY_VERSION..=BYTES_VERSION).contains(&version) {
         bail!("unsupported LithoVM bytecode version {version}");
     }
     let storage = if version >= STORAGE_VERSION {
@@ -492,6 +514,66 @@ pub fn parse(bytes: &[u8]) -> Result<Program> {
     Ok(program)
 }
 
+fn requires_bytes(body: &[Statement]) -> bool {
+    let hash = |code: &[Instruction]| code.contains(&Instruction::Keccak256);
+    body.iter().any(|statement| match statement {
+        Statement::Create {
+            template,
+            salt,
+            initializer,
+            value,
+            arguments,
+        } => {
+            [template, salt, initializer, value].iter().any(|c| hash(c))
+                || arguments
+                    .iter()
+                    .any(|(ty, code)| *ty == ValueType::Bytes || hash(code))
+        }
+        Statement::Invoke {
+            return_type,
+            target,
+            selector,
+            value,
+            arguments,
+        } => {
+            *return_type == ValueType::Bytes
+                || [target, selector, value].iter().any(|c| hash(c))
+                || arguments
+                    .iter()
+                    .any(|(ty, code)| *ty == ValueType::Bytes || hash(code))
+        }
+        Statement::Let {
+            value_type,
+            expression,
+        }
+        | Statement::LetMutable {
+            value_type,
+            expression,
+        } => *value_type == ValueType::Bytes || hash(expression),
+        Statement::SetLocal { expression, .. }
+        | Statement::Store { expression, .. }
+        | Statement::Require(expression)
+        | Statement::Return(expression) => hash(expression),
+        Statement::MapStore {
+            keys, expression, ..
+        } => keys.iter().any(|c| hash(c)) || hash(expression),
+        Statement::Emit { values, .. } => values.iter().any(|c| hash(c)),
+        Statement::Transfer { recipient, amount } => hash(recipient) || hash(amount),
+        Statement::Call {
+            target,
+            selector,
+            value,
+        } => [target, selector, value].iter().any(|c| hash(c)),
+        Statement::Repeat { count, body } => hash(count) || requires_bytes(body),
+        Statement::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => hash(condition) || requires_bytes(then_branch) || requires_bytes(else_branch),
+        Statement::Revert => false,
+    })
+}
+
 fn contains_statement(body: &[Statement], invoke: bool) -> bool {
     body.iter().any(|statement| match statement {
         Statement::Invoke { .. } => invoke,
@@ -530,6 +612,7 @@ fn validate_call_mode(program: &Program) -> Result<()> {
 pub fn validate_word(value_type: ValueType, word: &[u8; 32]) -> Result<()> {
     match value_type {
         ValueType::String => bail!("string cannot be represented by a scalar word"),
+        ValueType::Bytes => bail!("bytes cannot be represented by a scalar word"),
         ValueType::U64 if word[..24] != [0; 24] => bail!("non-canonical u64 value"),
         ValueType::Bool if word[..31] != [0; 31] || word[31] > 1 => {
             bail!("non-canonical bool value")
@@ -544,6 +627,9 @@ fn validate_storage(storage: &[StorageField]) -> Result<()> {
         bail!("program exceeds {MAX_STORAGE_FIELDS} storage fields");
     }
     for (index, field) in storage.iter().enumerate() {
+        if field.value_type == ValueType::Bytes {
+            bail!("bytes storage is unsupported");
+        }
         if field.name.is_empty()
             || field.name.len() > MAX_NAME_BYTES
             || !field.name.is_ascii()
@@ -568,6 +654,9 @@ fn validate_maps(maps: &[MapField]) -> Result<()> {
     for (index, map) in maps.iter().enumerate() {
         if map.value_type == ValueType::String || map.key_types.contains(&ValueType::String) {
             bail!("string map keys and values are unsupported");
+        }
+        if map.value_type == ValueType::Bytes || map.key_types.contains(&ValueType::Bytes) {
+            bail!("bytes map keys and values are unsupported");
         }
         validate_name(&map.name, "map")?;
         if maps[..index].iter().any(|earlier| earlier.name == map.name) {
@@ -866,6 +955,7 @@ fn encode_instruction(bytes: &mut Vec<u8>, instruction: &Instruction) {
         Instruction::AddU256 => bytes.push(17),
         Instruction::SubU256 => bytes.push(18),
         Instruction::GteU256 => bytes.push(19),
+        Instruction::Keccak256 => bytes.push(20),
     }
 }
 
@@ -896,6 +986,7 @@ fn decode_instruction(reader: &mut Reader<'_>, version: u8) -> Result<Instructio
         17 if version >= VERSION => Ok(Instruction::AddU256),
         18 if version >= VERSION => Ok(Instruction::SubU256),
         19 if version >= VERSION => Ok(Instruction::GteU256),
+        20 if version >= BYTES_VERSION => Ok(Instruction::Keccak256),
         opcode => bail!("unknown LithoVM instruction opcode {opcode}"),
     }
 }
@@ -1127,6 +1218,10 @@ fn validate_expression(
                 pop_expected(&mut stack, ValueType::U256)?;
                 pop_expected(&mut stack, ValueType::U256)?;
                 stack.push(ValueType::Bool);
+            }
+            Instruction::Keccak256 => {
+                pop_expected(&mut stack, ValueType::Bytes)?;
+                stack.push(ValueType::Bytes32);
             }
         }
     }
@@ -1494,7 +1589,7 @@ mod tests {
         trailing.push(0);
         assert!(parse(&trailing).is_err());
         let mut version = bytes;
-        version[MAGIC.len()] = CREATE_VERSION + 1;
+        version[MAGIC.len()] = BYTES_VERSION + 1;
         assert!(parse(&version).is_err());
     }
 

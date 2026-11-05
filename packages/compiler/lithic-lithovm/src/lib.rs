@@ -304,6 +304,7 @@ fn lower_type(value: &Type) -> Result<ValueType, String> {
             "address" => Ok(ValueType::Address),
             "bytes32" => Ok(ValueType::Bytes32),
             "string" => Ok(ValueType::String),
+            "bytes" => Ok(ValueType::Bytes),
             other => Err(format!("type '{other}' has no native LithoVM v11 lowering")),
         },
         Type::Map(_, _) | Type::Vec(_) => Err("collection types are unsupported".to_string()),
@@ -336,6 +337,7 @@ fn lower_named_type(name: &str) -> Result<ValueType, String> {
         "address" => Ok(ValueType::Address),
         "bytes32" => Ok(ValueType::Bytes32),
         "string" => Ok(ValueType::String),
+        "bytes" => Ok(ValueType::Bytes),
         other => Err(format!("type '{other}' has no native LithoVM v11 lowering")),
     }
 }
@@ -1125,6 +1127,9 @@ fn parse_return(
 
 fn parse_constant(value: &str, value_type: ValueType) -> Result<[u8; 32], String> {
     match value_type {
+        ValueType::Bytes => {
+            Err("bytes literals are unsupported; pass a bytes parameter".to_string())
+        }
         ValueType::String => {
             Err("string literals are not yet supported; pass a string parameter".to_string())
         }
@@ -1387,6 +1392,22 @@ impl<'a> ExpressionParser<'a> {
                 ValueType::Bool,
             )),
             ExprToken::Ident(name) => {
+                if name == "keccak256" && self.eat(&ExprToken::LParen) {
+                    if self.depth >= MAX_EXPRESSION_DEPTH {
+                        return Err(format!("return expression exceeds maximum nesting depth {MAX_EXPRESSION_DEPTH}"));
+                    }
+                    self.depth += 1;
+                    let (mut code, ty) = self.parse_equality()?;
+                    self.depth -= 1;
+                    if ty != ValueType::Bytes {
+                        return Err("runtime keccak256 requires a bytes argument".to_string());
+                    }
+                    if !self.eat(&ExprToken::RParen) {
+                        return Err("runtime keccak256 requires exactly one argument".to_string());
+                    }
+                    code.push(Instruction::Keccak256);
+                    return Ok((code, ValueType::Bytes32));
+                }
                 if let Some((instruction, value_type)) = match name.as_str() {
                     "msg.sender" => Some((Instruction::MessageSender, ValueType::Address)),
                     "msg.value" => Some((Instruction::MessageValue, ValueType::U256)),
