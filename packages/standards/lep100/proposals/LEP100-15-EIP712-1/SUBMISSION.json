@@ -1,0 +1,20 @@
+{
+  "decision_requested": "explicit acceptance or amendment bound to exact profile and vector SHA-256 hashes",
+  "files": {
+    "SIGNING_PROFILE.md": {
+      "bytes": 33164,
+      "original_filename": "LEP100_15_SIGNING_PROFILE_RESEARCH.md",
+      "sha256": "93d3c635d55a011b52f75c91923e310cbd5dc4d99afa910d3206c6e07859a99c"
+    },
+    "SIGNING_VECTORS.json": {
+      "bytes": 14768,
+      "original_filename": "LEP100_15_PROPOSED_VECTORS.json",
+      "sha256": "8fbc504280a07902d1b9bdc1517061c35dee1f708e8b938f879dcf5d31fc8c45"
+    }
+  },
+  "native_conformance": false,
+  "production_or_rollout_authority": false,
+  "profile": "LEP100-15-EIP712-1",
+  "standard": "LEP100-15",
+  "status": "PROPOSED_PENDING_MAINTAINER_DECISION"
+}
