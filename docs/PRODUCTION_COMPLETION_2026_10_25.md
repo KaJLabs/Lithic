@@ -111,7 +111,7 @@ clear those advisories or establish security acceptance.
 | --- | --- | --- |
 | Language/runtime support | Freeze the supported production language/ABI profile and reject all unsupported semantics; resolve required collection/operation gaps against real integration cases | Typed maps, strings and synchronous calls/creation are implemented; general arrays and other documented unsupported forms must not be advertised as implemented |
 | LEP100-15 | Obtain the maintainers' hash-bound profile/vector decision, implement/review native account semantics and pass positive/negative replay/threshold/atomicity tests | PR #14 remains proposed. Binary/hash primitives do not implement signature verification or an account. An EVM vault's own suite does not establish native conformance |
-| Validator performance/economics | Complete the authorized sustained workload/state-size matrix, derive resource/state-growth budgets and approve cap/gas policy | The accepted 25M slice is limited evidence. The full 50M benchmark remains failed. R6.4 public evidence checks passed for 2,201 zero-failure workload transactions within the approved bounds; owner-private stacks were delivered for independent pinned-checker replay/final closeout. No new workload is authorized |
+| Validator performance/economics | Complete the authorized sustained workload/state-size matrix, derive resource/state-growth budgets and approve cap/gas policy | The accepted 25M slice is limited evidence. The full 50M benchmark remains failed and unaccepted. R6.4 bounded-diagnostic evidence review is complete: independent offline replay with the unmodified pinned checker verified all 168 raw artifacts and 76 private snapshots and matched the server/preserved replay results. Its missing-evidence condition is closed. Unique root cause and physical-storage durability remain unestablished. No new workload, retry or production action is authorized |
 | Chain compatibility/integration | Match accepted compiler/runtime/library pins to the chain build and complete authenticated deployment/calls, rollback/OOG/recovery, verification/status and client end-to-end evidence | Makalu native activation has separate evidence; token-specific rehearsal belongs to the LAX session. Mainnet activation is not established by local release tooling |
 | Security and release | Review current dependency/SBOM and fuzz/coverage evidence, close findings against the final source, verify approved signing/provenance and authorize publication/rollout | Native-platform rebuild/package and Rust checks pass at the source pin above; unsigned CI candidates and dependency scope evidence are available. Independent reproduction, signing and final security acceptance remain open |
 
@@ -127,8 +127,12 @@ This is dated chain evidence, not a fresh RPC assertion or production approval.
 Do not repeat the old claim that no native Makalu integration has occurred.
 
 The same workspace retains the failed 50M benchmark, accepted R4/R5 diagnostics
-and R6.1 stop as distinct historical results. Local packaging/fuzz improvements
-do not change those dispositions or authorize another remote workload.
+and R6.1 stop as distinct historical results. The 6 November user-relayed
+independent review closes the R6.4 bounded-diagnostic evidence review only;
+the public packet and owner-private supplement remain unchanged. Raw stack
+snapshots remain private. Local packaging/fuzz improvements and diagnostic
+evidence acceptance do not change the failed 50M benchmark disposition or
+authorize another remote workload.
 
 ## Ownership and next concrete actions
 
@@ -137,8 +141,9 @@ do not change those dispositions or authorize another remote workload.
 - Standards owners/Foundation: supply accepted LEP100-15 canonical signing rules
   and the required production profile. Existing unresolved choices cannot be
   invented by the implementation and called interoperable.
-- Foundation technical approver/operators: decide the pending bounded diagnostic
-  continuation and final workload/economics acceptance using actual evidence.
+- Foundation technical approver/operators: review the remaining performance
+  finding and required workload/economics gates. R6.4 evidence review is closed;
+  no further workload, retry or production action is currently authorized.
 - Independent reviewer/release owner: review the final delta and evidence,
   establish the signing identity and approve publication/rollout.
 
