@@ -16,7 +16,7 @@ fn val(ty: ValueType, n: u64) -> Value {
 }
 fn deploy(source: &str) -> (TransactionalHost<InMemoryState>, [u8; 32], Vec<u8>) {
     let artifact = compile(source).unwrap();
-    assert_eq!(artifact.bytecode_version, 16);
+    assert!(matches!(artifact.bytecode_version, 16 | 17));
     let bytes = hex::decode(&artifact.bytecode[2..]).unwrap();
     let mut host = TransactionalHost::new(InMemoryState::default());
     let outcome = host.deploy_values(DeployRequest {
@@ -350,7 +350,7 @@ fn intrinsic_type_and_nested_argument_errors_fail_the_entire_build() {
         assert!(compile(&source).is_err(), "accepted {expr}");
     }
     let source="contract Nested { pub fn x(target: address, selector: bytes32, data: bytes) -> bytes { let answer: bytes = invoke(target, selector, 0, bytes_slice(bytes_concat(data, data), 0, bytes_len(data))); return answer; } }";
-    assert_eq!(compile(source).unwrap().bytecode_version, 16);
+    assert_eq!(compile(source).unwrap().bytecode_version, 17);
     let old = "contract Old { pub fn echo(bytes_len: u64) -> u64 { return bytes_len; } }";
     assert_eq!(compile(old).unwrap().bytecode_version, 11);
 }

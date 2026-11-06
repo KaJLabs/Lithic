@@ -1,5 +1,7 @@
 use anyhow::{anyhow, bail, Result};
 use sha3::{Digest, Keccak256};
+#[cfg(test)]
+mod compact_tests;
 pub mod values;
 
 pub const MAGIC: &[u8; 7] = b"LITHOVM";
@@ -22,6 +24,8 @@ pub const CREATE_VERSION: u8 = 14;
 pub const BYTES_VERSION: u8 = 15;
 /// Bounded byte manipulation, strict signature verification and self identity.
 pub const ACCOUNT_PRIMITIVES_VERSION: u8 = 16;
+/// Compact scalar constants; an opt-in development format, not a chain profile.
+pub const COMPACT_CONSTANT_VERSION: u8 = 17;
 pub const MAX_FUNCTIONS: usize = 1024;
 pub const MAX_PARAMETERS: usize = 64;
 pub const MAX_NAME_BYTES: usize = 255;
@@ -152,6 +156,7 @@ pub enum Statement {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Instruction {
     Constant(ValueType, [u8; 32]),
+    CompactConstant(ValueType, [u8; 32]),
     Parameter(u16),
     Local(u16),
     Storage(u16),
@@ -187,6 +192,7 @@ pub enum Instruction {
 impl Instruction {
     fn minimum_version(&self) -> u8 {
         match self {
+            Self::CompactConstant(..) => COMPACT_CONSTANT_VERSION,
             Self::BytesLen
             | Self::BytesConcat
             | Self::BytesSlice
@@ -264,6 +270,15 @@ struct ValidationSchema<'a> {
 
 impl Program {
     pub fn bytecode_version(&self) -> u8 {
+        if self.functions.iter().any(|f| match &f.return_value {
+            ReturnValue::Expression(code) => code
+                .iter()
+                .any(|i| i.minimum_version() >= COMPACT_CONSTANT_VERSION),
+            ReturnValue::Statements(body) => requires_version(body, COMPACT_CONSTANT_VERSION),
+            _ => false,
+        }) {
+            return COMPACT_CONSTANT_VERSION;
+        }
         if self.functions.iter().any(|f| match &f.return_value {
             ReturnValue::Expression(code) => code
                 .iter()
@@ -387,7 +402,7 @@ pub fn parse(bytes: &[u8]) -> Result<Program> {
         bail!("invalid LithoVM bytecode magic");
     }
     let version = reader.byte()?;
-    if !(LEGACY_VERSION..=ACCOUNT_PRIMITIVES_VERSION).contains(&version) {
+    if !(LEGACY_VERSION..=COMPACT_CONSTANT_VERSION).contains(&version) {
         bail!("unsupported LithoVM bytecode version {version}");
     }
     let storage = if version >= STORAGE_VERSION {
@@ -566,7 +581,15 @@ fn requires_version(body: &[Statement], version: u8) -> bool {
     let hash = |code: &[Instruction]| code.iter().any(|i| i.minimum_version() >= version);
     let bytes = |ty: ValueType| version <= BYTES_VERSION && ty == ValueType::Bytes;
     body.iter().any(|statement| match statement {
-        Statement::PayloadInvoke { .. } => version <= ACCOUNT_PRIMITIVES_VERSION,
+        Statement::PayloadInvoke {
+            target,
+            value,
+            payload,
+            ..
+        } => {
+            version <= ACCOUNT_PRIMITIVES_VERSION
+                || [target, value, payload].iter().any(|c| hash(c))
+        }
         Statement::Create {
             template,
             salt,
@@ -981,6 +1004,11 @@ fn encode_statements(bytes: &mut Vec<u8>, statements: &[Statement]) -> Result<()
 
 fn encode_instruction(bytes: &mut Vec<u8>, instruction: &Instruction) {
     match instruction {
+        Instruction::CompactConstant(value_type, word) => {
+            let start = word.iter().position(|byte| *byte != 0).unwrap_or(32);
+            bytes.extend_from_slice(&[32, *value_type as u8, (32 - start) as u8]);
+            bytes.extend_from_slice(&word[start..]);
+        }
         Instruction::Constant(value_type, word) => {
             bytes.push(1);
             bytes.push(*value_type as u8);
@@ -1070,6 +1098,23 @@ fn decode_instruction(reader: &mut Reader<'_>, version: u8) -> Result<Instructio
         29 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::WordU256),
         30 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::Secp256k1Verify),
         31 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::ContractAddress),
+        32 if version >= COMPACT_CONSTANT_VERSION => {
+            let value_type = ValueType::from_byte(reader.byte()?)?;
+            let len = reader.byte()? as usize;
+            // At 31/32 bytes the compact form does not save space. Zero is empty;
+            // every nonempty payload begins with a nonzero byte (no malleability).
+            if len > 30 {
+                bail!("compact constant must save space");
+            }
+            let payload = reader.take(len)?;
+            if payload.first() == Some(&0) {
+                bail!("non-minimal compact constant");
+            }
+            let mut word = [0; 32];
+            word[32 - len..].copy_from_slice(payload);
+            validate_word(value_type, &word)?;
+            Ok(Instruction::CompactConstant(value_type, word))
+        }
         opcode => bail!("unknown LithoVM instruction opcode {opcode}"),
     }
 }
@@ -1239,8 +1284,12 @@ fn validate_expression(
     let mut stack = Vec::new();
     for instruction in instructions {
         match instruction {
-            Instruction::Constant(value_type, word) => {
+            Instruction::Constant(value_type, word)
+            | Instruction::CompactConstant(value_type, word) => {
                 validate_word(*value_type, word)?;
+                if matches!(instruction, Instruction::CompactConstant(..)) && word[..2] != [0; 2] {
+                    bail!("compact constant must save space");
+                }
                 stack.push(*value_type);
             }
             Instruction::Parameter(index) => stack.push(
@@ -1743,7 +1792,7 @@ mod tests {
         trailing.push(0);
         assert!(parse(&trailing).is_err());
         let mut version = bytes;
-        version[MAGIC.len()] = ACCOUNT_PRIMITIVES_VERSION + 1;
+        version[MAGIC.len()] = COMPACT_CONSTANT_VERSION + 1;
         assert!(parse(&version).is_err());
     }
 

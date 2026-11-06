@@ -609,12 +609,17 @@ mod tests {
             decoded["values"][0],
             json!({"type":"bytes","value":"0x00ff80"})
         );
-        let source = "contract Binary { pub fn echo(data: bytes) -> bytes { return data; } }";
         let flags = BTreeMap::from([("--chain-id".into(), "700777".into())]);
-        for command in ["prepare-deploy", "prepare-call"] {
-            assert!(prepare(command, source, &flags)
-                .unwrap_err()
-                .contains("Makalu v14 profile"));
+        for (version, source) in [
+            (15, "contract Binary { pub fn echo(data: bytes) -> bytes { return data; } }"),
+            (17, "contract Compact { pub fn get(data: bytes) -> u64 { return bytes_get(data, 0); } }"),
+        ] {
+            assert_eq!(lithic_lithovm::compile(source).unwrap().bytecode_version,version);
+            for command in ["prepare-deploy", "prepare-call"] {
+                assert!(prepare(command, source, &flags)
+                    .unwrap_err()
+                    .contains("Makalu v14 profile"));
+            }
         }
     }
 

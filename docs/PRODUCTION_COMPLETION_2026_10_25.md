@@ -75,6 +75,19 @@ conformance. The canonical signing profile/vectors have been submitted in
 [official PR #14](https://github.com/KaJLabs/Lithic/pull/14), with no maintainer
 decision recorded as of this update.
 
+The subsequent [v17 encoding/record extension](LITHOVM_DYNAMIC_VALUES_V1.md#compact-constants-and-contract-records-v17)
+reduces the account from 23,924 to 8,703 code bytes. A real local C-ABI
+deployment/initialization with two key signers now costs 7,156,313 native gas
+under the unchanged disabled-candidate schedule and 10M cap, versus 33,209,053
+before compaction. Older bytecode/record codecs retain their representations.
+This resolves the measured account initialization case locally; it does not
+guarantee deployment of every code size or close final chain/pricing gates.
+Validation: 209 Rust tests, fmt/clippy, all 22 Go lab tests and 45,000 final
+fuzz cases across bytecode decoding, account authorization and persisted FFI
+records pass. The Go lab confirms exact-budget success, OOG rollback and
+native genesis export/import/reload. The reviewed release and prior evidence
+remain unchanged; this is a new local development candidate.
+
 The [September baseline matrix](PRODUCTION_GAP_MATRIX.md) records preview.3 and
 the then-local candidate. Use the following current boundaries with the
 remaining production gates below; September network-availability statements are
@@ -115,7 +128,7 @@ clear those advisories or establish security acceptance.
 | Area | Required closure | Current boundary |
 | --- | --- | --- |
 | Language/runtime support | Freeze the supported production language/ABI profile and reject all unsupported semantics; resolve required collection/operation gaps against real integration cases | Typed maps, strings and synchronous calls/creation are implemented; general arrays and other documented unsupported forms must not be advertised as implemented |
-| LEP100-15 | Obtain the maintainers' hash-bound decision, finalize the authoritative language/account/interface and recovery scope, and pass official native conformance and security review | PR #14 remains proposed. The v16 fixture exercises signatures, thresholds, nonce lifecycle, revocation, native contract signers, governance and atomic calls locally; general Vec/struct syntax, guardian recovery and detached nested-account signatures remain unsupported. Its 23,924-byte code alone exceeds the current 10M candidate envelope under unchanged hex-record growth pricing; no deployability or conformance claim |
+| LEP100-15 | Obtain the maintainers' hash-bound decision, finalize the authoritative language/account/interface and recovery scope, and pass official native conformance and security review | PR #14 remains proposed. The fixture exercises signatures, thresholds, nonce lifecycle, revocation, native contract signers, governance and atomic calls locally; general Vec/struct syntax, guardian recovery and detached nested-account signatures remain unsupported. V17 compaction/binary records bring the two-key initialization case within the unchanged candidate envelope; final economics, chain compatibility and conformance remain open |
 | Validator performance/economics | Complete the authorized sustained workload/state-size matrix, derive resource/state-growth budgets and approve cap/gas policy | The accepted 25M slice is limited evidence. The full 50M benchmark remains failed and unaccepted. R6.4 bounded-diagnostic evidence review is complete: independent offline replay with the unmodified pinned checker verified all 168 raw artifacts and 76 private snapshots and matched the server/preserved replay results. Its missing-evidence condition is closed. Unique root cause and physical-storage durability remain unestablished. No new workload, retry or production action is authorized |
 | Chain compatibility/integration | Match accepted compiler/runtime/library pins to the chain build and complete authenticated deployment/calls, rollback/OOG/recovery, verification/status and client end-to-end evidence | Makalu native activation has separate evidence; token-specific rehearsal belongs to the LAX session. Mainnet activation is not established by local release tooling |
 | Security and release | Review current dependency/SBOM and fuzz/coverage evidence, close findings against the final source, verify approved signing/provenance and authorize publication/rollout | Native-platform rebuild/package and Rust checks pass at the source pin above; unsigned CI candidates and dependency scope evidence are available. Independent reproduction, signing and final security acceptance remain open |

@@ -15,6 +15,7 @@ lithic-lithovm = { path = "../packages/compiler/lithic-lithovm" }
 lithovm = { path = "../packages/vm/lithovm" }
 lithovm-bytecode = { path = "../packages/vm/bytecode" }
 lithovm-host = { path = "../packages/vm/lithovm-host" }
+lithovm-ffi = { path = "../packages/vm/lithovm-ffi" }
 
 [[bin]]
 name = "bytecode_decode"
@@ -64,6 +65,13 @@ bench = false
 [[bin]]
 name = "account_authorization"
 path = "fuzz_targets/account_authorization.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ffi_records"
+path = "fuzz_targets/ffi_records.rs"
 test = false
 doc = false
 bench = false

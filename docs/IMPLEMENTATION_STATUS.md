@@ -11,7 +11,7 @@ full language/standards conformance.
 
 | Tool | Current implementation |
 |---|---|
-| lithc | Parses/checks declarations and emits ABI plus executable EVM or versioned native LithoVM bytecode for the documented subset. Native artifacts through the separate v16 candidate include compiler/target versions, exact source/code hashes and canonical full-hash entrypoint selectors. Unsupported semantics fail the complete build. |
+| lithc | Parses/checks declarations and emits ABI plus executable EVM or versioned native LithoVM bytecode for the documented subset. Native artifacts through the separate v17 candidate include compiler/target versions, exact source/code hashes and canonical full-hash entrypoint selectors. Unsupported semantics fail the complete build. |
 | lithovm-host | Transactional chain-state seam plus in-memory conformance adapter. Produces structured failure/gas outcomes, atomically executes call trees, and rejects reentrancy. Deployment v1 derives selectors from validated bytecode and adds code hashes, deterministic addresses, value transfer and optional initializer execution in one transaction. No Lithosphere persistence/RPC adapter is included. |
 | lithfmt | Parse-checked, literal-preserving whitespace normalization; supports --check. |
 | lithlint | Declaration-level naming and AI-budget rules; supports --deny-warnings. Not a security analyzer. |
@@ -40,14 +40,16 @@ base-account fixture tests signatures, thresholds, nonces, proposals, approval
 revocation, signer management, cancellation and native call/token custody.
 Canonical ABI arrays are processed within bounded binary values; general
 `Vec`/struct syntax and guardian recovery remain unsupported. The signing
-profile is still proposed, and the account's current deployment-growth cost
-exceeds the existing 10M test envelope. This is local engineering evidence,
+profile is still proposed. The [v17 encoding/record extension](LITHOVM_DYNAMIC_VALUES_V1.md#compact-constants-and-contract-records-v17)
+reduces the account to 8,703 code bytes and its two-key initialization to
+7,156,313 native gas under the unchanged disabled-candidate schedule and 10M
+envelope. This is local engineering evidence,
 not production acceptance or a deployed/fully conforming LEP100-15 account.
 
 The separate [v15 binary/hash candidate](LITHOVM_DYNAMIC_VALUES_V1.md#binary-values-and-runtime-hashing-candidate-2026-11-06)
 adds bounded `bytes` values and runtime `keccak256(bytes)` across compiler, VM,
 typed host and local FFI. It preserves v1-v14 behavior and rejects preparing
-v15 intents for the documented Makalu v14 profile. Binary storage and general
+v15 intents for the documented Makalu v14 profile. Source `bytes` storage and general
 source arrays remain unsupported. Signature/base-account functionality belongs
 to the v16 candidate above, without a LEP100-15 conformance claim.
 This work does not replace the reviewed release or deployed runtime.

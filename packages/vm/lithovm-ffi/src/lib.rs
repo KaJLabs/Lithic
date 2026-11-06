@@ -16,6 +16,7 @@ use std::{
 
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 const MAX_WRITES: usize = 128;
+mod record;
 type ReadFn = unsafe extern "C" fn(usize, *const u8, usize, *mut u8, usize) -> isize;
 type ChargeFn = unsafe extern "C" fn(usize, u64) -> i32;
 #[repr(C)]
@@ -232,23 +233,20 @@ impl StateTransaction for Transaction<'_> {
             None => self.parent.read(&key)?,
         };
         let Some(bytes) = bytes else { return Ok(None) };
-        let record: Stored = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        if record.version != 2 {
-            return Err("unsupported contract record; explicit migration required".into());
-        }
-        let code = decode(&record.bytecode)?;
+        let record = record::decode_record(&bytes)?;
+        let code = record.bytecode;
         if code.len() > MAX_CHILD_CODE_BYTES {
             return Err("code exceeds harness limit".into());
         }
         let hash = code_hash(&code);
-        if hex(&hash) != record.code_hash {
+        if hash != record.code_hash {
             return Err("stored code hash mismatch".into());
         }
         let program = parse(&code).map_err(|e| e.to_string())?;
-        let mut storage = Storage::from_persisted_bytes(&decode(&record.storage)?, &program)
-            .map_err(|e| e.to_string())?;
+        let mut storage =
+            Storage::from_persisted_bytes(&record.storage, &program).map_err(|e| e.to_string())?;
         if !storage.staged_map_entries().is_empty() {
-            return Err("v2 contract record contains inline map entries".into());
+            return Err("contract record contains inline map entries".into());
         }
         storage.attach_map_reader(Rc::new(CallbackMapReader {
             read: self.parent.read,
@@ -275,16 +273,7 @@ impl StateTransaction for Transaction<'_> {
         address: Address,
         contract: DeployedContract,
     ) -> Result<(), String> {
-        let bytes = serde_json::to_vec(&Stored {
-            version: 2,
-            bytecode: hex(&contract.bytecode),
-            code_hash: hex(&contract.code_hash),
-            storage: hex(&contract
-                .storage
-                .to_persisted_scalar_bytes()
-                .map_err(|e| e.to_string())?),
-        })
-        .map_err(|e| e.to_string())?;
+        let bytes = record::encode_record(&contract)?;
         let mut proposed = self.writes.clone();
         proposed.insert(key(&address), bytes);
         let mut map_updates = BTreeMap::new();
@@ -601,9 +590,12 @@ pub unsafe extern "C" fn lithovm_free_v1(buffer: Buffer) {
 }
 
 #[cfg(test)]
+mod deployment_budget_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    fn state() -> CallbackState {
+    pub(super) fn state() -> CallbackState {
         CallbackState {
             read: absent,
             context: 0,

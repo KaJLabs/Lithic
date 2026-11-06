@@ -346,6 +346,7 @@ dependencies = [
  "lithic-lithovm",
  "lithovm",
  "lithovm-bytecode",
+ "lithovm-ffi",
  "lithovm-host",
  "serde_json",
 ]
@@ -386,6 +387,18 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "sha3",
+]
+
+[[package]]
+name = "lithovm-ffi"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "lithovm",
+ "lithovm-bytecode",
+ "lithovm-host",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

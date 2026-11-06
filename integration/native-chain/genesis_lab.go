@@ -43,38 +43,12 @@ func validateNativeEntry(key string, value []byte) error {
 	if len(value) == 0 || len(value) > MaxBytes {
 		return errors.New("invalid native contract record size")
 	}
-	var record struct {
-		Version  int    `json:"version"`
-		Bytecode string `json:"bytecode"`
-		CodeHash string `json:"code_hash"`
-		Storage  string `json:"storage"`
-	}
-	decoder := json.NewDecoder(bytes.NewReader(value))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&record); err != nil {
+	code, hash, storageBytes, err := decodeNativeRecord(value)
+	if err != nil {
 		return fmt.Errorf("invalid native contract record: %w", err)
 	}
-	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
-		return errors.New("trailing native contract record data")
-	}
-	if record.Version != 2 || !canonicalHex(strings.TrimPrefix(record.CodeHash, "0x"), 64) ||
-		!strings.HasPrefix(record.CodeHash, "0x") || !strings.HasPrefix(record.Bytecode, "0x") ||
-		!strings.HasPrefix(record.Storage, "0x") {
-		return errors.New("unsupported native contract record")
-	}
-	code, err := hex.DecodeString(record.Bytecode[2:])
-	if err != nil {
-		return errors.New("invalid native bytecode hex")
-	}
-	if strings.ToLower(record.Bytecode) != record.Bytecode ||
-		strings.ToLower(record.Storage) != record.Storage ||
-		strings.ToLower(record.CodeHash) != record.CodeHash ||
-		strings.ToLower(crypto.Keccak256Hash(code).Hex()) != record.CodeHash {
+	if !bytes.Equal(crypto.Keccak256(code), hash) {
 		return errors.New("native contract code hash mismatch")
-	}
-	storageBytes, err := hex.DecodeString(record.Storage[2:])
-	if err != nil {
-		return errors.New("invalid native storage hex")
 	}
 	var scalar struct {
 		Version int                  `json:"version"`

@@ -8,4 +8,5 @@ fuzz/corpus/child_creation/** -text
 fuzz/corpus/synchronous_calls/** -text
 fuzz/corpus/binary_values/** -text
 fuzz/corpus/account_authorization/** -text
+fuzz/corpus/ffi_records/** -text
 docs/evidence/LITHIC_DURABLE_TOKEN_STATE_2026_10_01.log -text

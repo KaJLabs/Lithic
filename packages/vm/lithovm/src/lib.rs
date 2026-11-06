@@ -981,7 +981,8 @@ fn evaluate_expression(
     let mut stack: Vec<StackValue> = Vec::new();
     for instruction in instructions {
         match instruction {
-            Instruction::Constant(value_type, word) => {
+            Instruction::Constant(value_type, word)
+            | Instruction::CompactConstant(value_type, word) => {
                 stack.push(StackValue::scalar(*value_type, *word))
             }
             Instruction::Parameter(index) => {

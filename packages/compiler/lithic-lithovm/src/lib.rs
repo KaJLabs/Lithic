@@ -16,6 +16,7 @@ use std::fmt;
 
 pub const TARGET: &str = "lithovm-native-v11";
 pub const ARTIFACT_VERSION: u8 = 1;
+mod compact;
 pub mod verification;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -203,12 +204,13 @@ fn compile_contract(contract: &Contract, source: &str) -> Result<Artifact, Compi
         return Err(CompileError { messages: errors });
     }
 
-    let program = Program {
+    let mut program = Program {
         storage,
         maps,
         events,
         functions,
     };
+    compact::optimize(&mut program);
     let bytes = program
         .encode()
         .map_err(|error| CompileError::one(format!("bytecode encoding failed: {error}")))?;

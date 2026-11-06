@@ -240,13 +240,63 @@ for the documented Makalu v14 profile.
 
 ### Code admission and deployment budget
 
-The current account compiles to **23,924 bytecode bytes**, below the 65,536-byte
+The original v16 account compiled to **23,924 bytecode bytes**, below the 65,536-byte
 code-admission bound. This is not a deployability or affordability guarantee.
-The current FFI contract record serializes bytecode as hex, requiring at least
+Its v2 FFI contract record serializes bytecode as hex, requiring at least
 47,850 value bytes for that field alone. Under the unchanged disabled-candidate
 growth formula (20,000 gas per additional rounded 32-byte allocation unit),
 code alone therefore needs at least **29,920,000 growth gas**, exceeding the
 current 10M native test envelope before write, key, VM or other state charges.
 This is an offline lower bound, not a keeper benchmark result. Final pricing,
 cap/layout policy and chain compatibility remain separate required gates;
-local tests do not clear this known admission-versus-deployability gap.
+that baseline did not fit the envelope. The v17 extension below resolves this
+specific account case locally, without establishing deployability for every
+artifact admitted by the 65,536-byte bound.
+
+## Compact constants and contract records (v17)
+
+The separate development candidate adds `lithovm-native-v17`. The compiler
+compacts constants only in programs already requiring v16 account primitives;
+older source programs retain their previous encodings. Opcode 32 encodes
+`type:u8 | length:u8 | minimal-big-endian-payload`. Payload length is 0 through
+30 bytes; zero has an empty payload. Leading zero bytes, noncanonical scalar
+values, dynamic types, oversized/truncated payloads and use below v17 are rejected.
+Full-width constants keep their original opcode. Compaction changes neither
+instruction count nor execution gas. Expanding the account's compact constants
+reproduces its exact original v16 code hash
+`0x18a4b57e792b0e357f3bf26ace42d899b68523ff064617585b2fa5204aba2cac`.
+
+New v17 contracts use the following persisted record framing:
+
+| Field | Encoding |
+| --- | --- |
+| Magic/version | `LCTR` followed by byte 3 |
+| Code length | Big-endian u32, at most 65,536 |
+| Code | Exact v17 bytecode, without hex expansion |
+| Code hash | Exact 32-byte Keccak-256 digest |
+| Scalar-storage length | Big-endian u32, within existing record/write limits |
+| Scalar storage | Existing scalar persistence bytes; maps remain separate keys |
+
+No trailing data is allowed. Record/code hashes, bytecode and scalar schemas
+are checked before execution. Existing v2 JSON records through v16 keep their
+codec and bytes; inline v1 records still require explicit migration. V17 in a
+v2 record and older bytecode in a binary record are rejected. This prevents
+implicit format migration. The local genesis import/export codec supports the
+new framing; the Rust and Go decoders share an exact test fixture.
+
+The real C-ABI deployment/initialization regression reduced the account from
+33,209,053 to **7,156,313 native gas**, using two key signers and threshold two,
+the existing KV/growth/log schedule and the unchanged 10M native envelope.
+Code size fell from 23,924 to **8,703 bytes**. Charges include actual physical
+reads, live VM fuel, changed writes, rounded key/value growth and emitted log
+bytes. Gateway decode and outer Ethereum transaction costs are additional and
+outside this native cap. Persisted-record/map reload is also exercised.
+The Go StateDB lab independently agrees with the local Rust price replay,
+succeeds at the exact budget and leaves no state/log effects one gas below it.
+Its genesis export/import/reload round trip preserves the account records.
+
+These results concern this local candidate and initialization fixture. They
+do not approve final economics, establish chain compatibility, provide native
+custody in the nonpayable FFI harness, or change any historical benchmark
+result. The reviewed release, R6 evidence and Makalu profile remain unchanged.
+`lithdev` still rejects preparing v17 artifacts for the documented v14 profile.
