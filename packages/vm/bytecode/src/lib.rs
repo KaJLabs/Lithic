@@ -20,6 +20,8 @@ pub const SYNC_VERSION: u8 = 13;
 pub const CREATE_VERSION: u8 = 14;
 /// Binary values and runtime hashing; not accepted by the v14 chain profile.
 pub const BYTES_VERSION: u8 = 15;
+/// Bounded byte manipulation, strict signature verification and self identity.
+pub const ACCOUNT_PRIMITIVES_VERSION: u8 = 16;
 pub const MAX_FUNCTIONS: usize = 1024;
 pub const MAX_PARAMETERS: usize = 64;
 pub const MAX_NAME_BYTES: usize = 255;
@@ -79,6 +81,12 @@ pub enum ReturnValue {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Statement {
+    PayloadInvoke {
+        read_only: bool,
+        target: Vec<Instruction>,
+        value: Vec<Instruction>,
+        payload: Vec<Instruction>,
+    },
     Create {
         template: Vec<Instruction>,
         salt: Vec<Instruction>,
@@ -163,6 +171,37 @@ pub enum Instruction {
     SubU256,
     GteU256,
     Keccak256,
+    BytesLen,
+    BytesConcat,
+    BytesSlice,
+    BytesGet,
+    WordBytes,
+    BytesWord,
+    WordAddress,
+    WordU64,
+    WordU256,
+    Secp256k1Verify,
+    ContractAddress,
+}
+
+impl Instruction {
+    fn minimum_version(&self) -> u8 {
+        match self {
+            Self::BytesLen
+            | Self::BytesConcat
+            | Self::BytesSlice
+            | Self::BytesGet
+            | Self::WordBytes
+            | Self::BytesWord
+            | Self::WordAddress
+            | Self::WordU64
+            | Self::WordU256
+            | Self::Secp256k1Verify
+            | Self::ContractAddress => ACCOUNT_PRIMITIVES_VERSION,
+            Self::Keccak256 => BYTES_VERSION,
+            _ => VERSION,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -225,6 +264,15 @@ struct ValidationSchema<'a> {
 
 impl Program {
     pub fn bytecode_version(&self) -> u8 {
+        if self.functions.iter().any(|f| match &f.return_value {
+            ReturnValue::Expression(code) => code
+                .iter()
+                .any(|i| i.minimum_version() >= ACCOUNT_PRIMITIVES_VERSION),
+            ReturnValue::Statements(body) => requires_version(body, ACCOUNT_PRIMITIVES_VERSION),
+            _ => false,
+        }) {
+            return ACCOUNT_PRIMITIVES_VERSION;
+        }
         if self
             .events
             .iter()
@@ -234,7 +282,7 @@ impl Program {
                     || f.parameters.contains(&ValueType::Bytes)
                     || match &f.return_value {
                         ReturnValue::Expression(code) => code.contains(&Instruction::Keccak256),
-                        ReturnValue::Statements(body) => requires_bytes(body),
+                        ReturnValue::Statements(body) => requires_version(body, BYTES_VERSION),
                         _ => false,
                     }
             })
@@ -339,7 +387,7 @@ pub fn parse(bytes: &[u8]) -> Result<Program> {
         bail!("invalid LithoVM bytecode magic");
     }
     let version = reader.byte()?;
-    if !(LEGACY_VERSION..=BYTES_VERSION).contains(&version) {
+    if !(LEGACY_VERSION..=ACCOUNT_PRIMITIVES_VERSION).contains(&version) {
         bail!("unsupported LithoVM bytecode version {version}");
     }
     let storage = if version >= STORAGE_VERSION {
@@ -514,9 +562,11 @@ pub fn parse(bytes: &[u8]) -> Result<Program> {
     Ok(program)
 }
 
-fn requires_bytes(body: &[Statement]) -> bool {
-    let hash = |code: &[Instruction]| code.contains(&Instruction::Keccak256);
+fn requires_version(body: &[Statement], version: u8) -> bool {
+    let hash = |code: &[Instruction]| code.iter().any(|i| i.minimum_version() >= version);
+    let bytes = |ty: ValueType| version <= BYTES_VERSION && ty == ValueType::Bytes;
     body.iter().any(|statement| match statement {
+        Statement::PayloadInvoke { .. } => version <= ACCOUNT_PRIMITIVES_VERSION,
         Statement::Create {
             template,
             salt,
@@ -525,9 +575,7 @@ fn requires_bytes(body: &[Statement]) -> bool {
             arguments,
         } => {
             [template, salt, initializer, value].iter().any(|c| hash(c))
-                || arguments
-                    .iter()
-                    .any(|(ty, code)| *ty == ValueType::Bytes || hash(code))
+                || arguments.iter().any(|(ty, code)| bytes(*ty) || hash(code))
         }
         Statement::Invoke {
             return_type,
@@ -536,11 +584,9 @@ fn requires_bytes(body: &[Statement]) -> bool {
             value,
             arguments,
         } => {
-            *return_type == ValueType::Bytes
+            bytes(*return_type)
                 || [target, selector, value].iter().any(|c| hash(c))
-                || arguments
-                    .iter()
-                    .any(|(ty, code)| *ty == ValueType::Bytes || hash(code))
+                || arguments.iter().any(|(ty, code)| bytes(*ty) || hash(code))
         }
         Statement::Let {
             value_type,
@@ -549,7 +595,7 @@ fn requires_bytes(body: &[Statement]) -> bool {
         | Statement::LetMutable {
             value_type,
             expression,
-        } => *value_type == ValueType::Bytes || hash(expression),
+        } => bytes(*value_type) || hash(expression),
         Statement::SetLocal { expression, .. }
         | Statement::Store { expression, .. }
         | Statement::Require(expression)
@@ -564,12 +610,16 @@ fn requires_bytes(body: &[Statement]) -> bool {
             selector,
             value,
         } => [target, selector, value].iter().any(|c| hash(c)),
-        Statement::Repeat { count, body } => hash(count) || requires_bytes(body),
+        Statement::Repeat { count, body } => hash(count) || requires_version(body, version),
         Statement::If {
             condition,
             then_branch,
             else_branch,
-        } => hash(condition) || requires_bytes(then_branch) || requires_bytes(else_branch),
+        } => {
+            hash(condition)
+                || requires_version(then_branch, version)
+                || requires_version(else_branch, version)
+        }
         Statement::Revert => false,
     })
 }
@@ -792,6 +842,17 @@ fn encode_statements(bytes: &mut Vec<u8>, statements: &[Statement]) -> Result<()
     push_u16(bytes, statements.len())?;
     for statement in statements {
         match statement {
+            Statement::PayloadInvoke {
+                read_only,
+                target,
+                value,
+                payload,
+            } => {
+                bytes.push(if *read_only { 17 } else { 16 });
+                for expression in [target, value, payload] {
+                    encode_expression(bytes, expression)?;
+                }
+            }
             Statement::Create {
                 template,
                 salt,
@@ -956,6 +1017,17 @@ fn encode_instruction(bytes: &mut Vec<u8>, instruction: &Instruction) {
         Instruction::SubU256 => bytes.push(18),
         Instruction::GteU256 => bytes.push(19),
         Instruction::Keccak256 => bytes.push(20),
+        Instruction::BytesLen => bytes.push(21),
+        Instruction::BytesConcat => bytes.push(22),
+        Instruction::BytesSlice => bytes.push(23),
+        Instruction::BytesGet => bytes.push(24),
+        Instruction::WordBytes => bytes.push(25),
+        Instruction::BytesWord => bytes.push(26),
+        Instruction::WordAddress => bytes.push(27),
+        Instruction::WordU64 => bytes.push(28),
+        Instruction::WordU256 => bytes.push(29),
+        Instruction::Secp256k1Verify => bytes.push(30),
+        Instruction::ContractAddress => bytes.push(31),
     }
 }
 
@@ -987,6 +1059,17 @@ fn decode_instruction(reader: &mut Reader<'_>, version: u8) -> Result<Instructio
         18 if version >= VERSION => Ok(Instruction::SubU256),
         19 if version >= VERSION => Ok(Instruction::GteU256),
         20 if version >= BYTES_VERSION => Ok(Instruction::Keccak256),
+        21 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::BytesLen),
+        22 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::BytesConcat),
+        23 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::BytesSlice),
+        24 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::BytesGet),
+        25 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::WordBytes),
+        26 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::BytesWord),
+        27 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::WordAddress),
+        28 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::WordU64),
+        29 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::WordU256),
+        30 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::Secp256k1Verify),
+        31 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::ContractAddress),
         opcode => bail!("unknown LithoVM instruction opcode {opcode}"),
     }
 }
@@ -1014,6 +1097,14 @@ fn decode_statements(reader: &mut Reader<'_>, version: u8, depth: usize) -> Resu
     let mut statements = Vec::with_capacity(statement_count);
     for _ in 0..statement_count {
         statements.push(match reader.byte()? {
+            opcode @ (16 | 17) if version >= ACCOUNT_PRIMITIVES_VERSION => {
+                Statement::PayloadInvoke {
+                    read_only: opcode == 17,
+                    target: decode_expression(reader, version)?,
+                    value: decode_expression(reader, version)?,
+                    payload: decode_expression(reader, version)?,
+                }
+            }
             15 if version >= CREATE_VERSION => {
                 let template = decode_expression(reader, version)?;
                 let salt = decode_expression(reader, version)?;
@@ -1223,6 +1314,54 @@ fn validate_expression(
                 pop_expected(&mut stack, ValueType::Bytes)?;
                 stack.push(ValueType::Bytes32);
             }
+            Instruction::ContractAddress => stack.push(ValueType::Address),
+            Instruction::BytesLen => {
+                pop_expected(&mut stack, ValueType::Bytes)?;
+                stack.push(ValueType::U64);
+            }
+            Instruction::BytesConcat => {
+                pop_expected(&mut stack, ValueType::Bytes)?;
+                pop_expected(&mut stack, ValueType::Bytes)?;
+                stack.push(ValueType::Bytes);
+            }
+            Instruction::BytesSlice => {
+                pop_expected(&mut stack, ValueType::U64)?;
+                pop_expected(&mut stack, ValueType::U64)?;
+                pop_expected(&mut stack, ValueType::Bytes)?;
+                stack.push(ValueType::Bytes);
+            }
+            Instruction::BytesGet => {
+                pop_expected(&mut stack, ValueType::U64)?;
+                pop_expected(&mut stack, ValueType::Bytes)?;
+                stack.push(ValueType::U64);
+            }
+            Instruction::WordBytes => {
+                let ty = stack
+                    .pop()
+                    .ok_or_else(|| anyhow!("expression stack underflow"))?;
+                if matches!(ty, ValueType::Bytes | ValueType::String) {
+                    bail!("word_bytes requires a scalar word");
+                }
+                stack.push(ValueType::Bytes);
+            }
+            Instruction::BytesWord => {
+                pop_expected(&mut stack, ValueType::Bytes)?;
+                stack.push(ValueType::Bytes32);
+            }
+            Instruction::WordAddress | Instruction::WordU64 | Instruction::WordU256 => {
+                pop_expected(&mut stack, ValueType::Bytes32)?;
+                stack.push(match instruction {
+                    Instruction::WordAddress => ValueType::Address,
+                    Instruction::WordU64 => ValueType::U64,
+                    _ => ValueType::U256,
+                });
+            }
+            Instruction::Secp256k1Verify => {
+                pop_expected(&mut stack, ValueType::Address)?;
+                pop_expected(&mut stack, ValueType::Bytes)?;
+                pop_expected(&mut stack, ValueType::Bytes32)?;
+                stack.push(ValueType::Bool);
+            }
         }
     }
     if stack.as_slice() != [return_type] {
@@ -1252,6 +1391,21 @@ fn validate_statements(
             bail!("unreachable statement after terminal return or branch");
         }
         match statement {
+            Statement::PayloadInvoke {
+                target,
+                value,
+                payload,
+                ..
+            } => {
+                validate_expression(target, parameters, &locals, schema, ValueType::Address)?;
+                validate_expression(value, parameters, &locals, schema, ValueType::U256)?;
+                validate_expression(payload, parameters, &locals, schema, ValueType::Bytes)?;
+                if locals.len() >= MAX_LOCALS {
+                    bail!("too many local bindings");
+                }
+                locals.push(ValueType::Bytes);
+                mutable.push(false);
+            }
             Statement::Create {
                 template,
                 salt,
@@ -1589,7 +1743,7 @@ mod tests {
         trailing.push(0);
         assert!(parse(&trailing).is_err());
         let mut version = bytes;
-        version[MAGIC.len()] = BYTES_VERSION + 1;
+        version[MAGIC.len()] = ACCOUNT_PRIMITIVES_VERSION + 1;
         assert!(parse(&version).is_err());
     }
 

@@ -370,6 +370,7 @@ impl<S: TransactionalState> TransactionalHost<S> {
         let mut active_contracts = vec![address];
         let initialized = if let Some(initializer) = request.initializer {
             let frame = FrameRequest {
+                read_only: false,
                 contract: address,
                 function: initializer.function,
                 arguments: initializer.arguments,
@@ -438,6 +439,7 @@ impl<S: TransactionalState> TransactionalHost<S> {
         };
         let mut active_contracts = vec![request.contract];
         let frame = FrameRequest {
+            read_only: false,
             contract: request.contract,
             function: request.function,
             arguments: request.arguments,
@@ -590,6 +592,7 @@ struct EventJournal<V> {
 }
 
 struct FrameRequest<V> {
+    read_only: bool,
     contract: Address,
     function: String,
     arguments: Vec<V>,
@@ -628,6 +631,8 @@ fn execute_frame<T: StateTransaction, V: HostValue>(
     }
     let contract_balance = load_balance(state, frame.contract, 0, frame.contract)?;
     let context = ExecutionContext {
+        read_only: frame.read_only,
+        contract: frame.contract,
         caller: frame.caller,
         value: frame.value,
         block_height: frame.block_height,
@@ -646,7 +651,9 @@ fn execute_frame<T: StateTransaction, V: HostValue>(
 
     // LithoVM calls are deferred effects. Persist the caller's storage before
     // entering children so reentrant frames observe checks/effects updates.
-    store_contract(state, frame.contract, contract, total_gas)?;
+    if !frame.read_only {
+        store_contract(state, frame.contract, contract, total_gas)?;
+    }
     if V::DYNAMIC {
         for event in &result.events {
             let size = 7 + event
@@ -749,6 +756,7 @@ fn execute_frame<T: StateTransaction, V: HostValue>(
         store_balance(state, call.target, child_balance, total_gas, call.target)?;
         let remaining_gas = frame.gas_limit.saturating_sub(total_gas);
         let child_frame = FrameRequest {
+            read_only: frame.read_only,
             contract: call.target,
             function,
             arguments: Vec::new(),

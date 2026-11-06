@@ -105,6 +105,8 @@ argument/return copying; out-of-gas and explicit revert discard state, events
 and nested effects. Binary storage, binary map keys/values, source literals,
 concatenation, indexing, general arrays and signature verification remain
 unsupported and do not gain semantics from this change.
+The v16 extension below adds bounded concatenation/indexing and signature
+verification; these remain absent from the reviewed v14 release.
 
 Candidate copy/equality charges follow string byte charging. Hashing adds
 `30 + 6 * ceil(payload_bytes / 32)` gas plus the existing instruction charge,
@@ -124,3 +126,127 @@ for v15 against its documented Makalu v14 profile. No reviewed node binary,
 runtime library, diagnostic pin, deployed contract or standard is replaced.
 The LEP100-15 signing proposal remains subject to the maintainers' decision;
 native account behavior and security/production acceptance remain separate.
+
+## Account primitives and proposed base-account candidate (v16)
+
+The separate development branch adds bytecode v16, `lithovm-native-v16`.
+Existing v1-v15 encodings remain readable and existing sources keep their
+previous target unless they use a new primitive. LVAL framing remains as above;
+no new envelope tag or silent conversion is introduced.
+
+| Source operation | Arguments | Result / rule |
+| --- | --- | --- |
+| `bytes_len` | `bytes` | `u64` length |
+| `bytes_concat` | `bytes, bytes` | Exact concatenation, at most 4,096 bytes |
+| `bytes_slice` | `bytes, u64 start, u64 length` | Checked range; empty slice at the end is valid |
+| `bytes_get` | `bytes, u64 index` | Unsigned byte as `u64`; checked index |
+| `word_bytes` | One scalar | Its canonical, big-endian 32-byte representation |
+| `bytes_word` | `bytes` | `bytes32`; requires exactly 32 bytes |
+| `word_address`, `word_u64`, `word_u256` | `bytes32` | Checked conversion; high bytes cannot be truncated |
+| `secp256k1_verify` | `bytes32 digest, bytes signature, address signer` | Strict public-key recovery/verification, returning `bool` |
+| `contract.address` | Authenticated host context | Executing account, distinct from `msg.sender` |
+
+The new instruction opcodes are 21 through 31 in table order (the three checked
+word conversions occupy 27-29). Every new instruction is gated on v16. A
+program selecting v16 uses hosted execution. Intrinsic names remain valid
+binding names when used without call parentheses. Host arguments may contain
+nested intrinsic calls without splitting their internal commas.
+
+Signature verification accepts only 65 bytes `r || s || v`, recovery value 27
+or 28, valid nonzero curve scalars, low S and the expected nonzero address.
+It verifies the supplied digest without hashing it again or normalizing a
+noncanonical signature. Invalid signatures return false. The runtime pins
+`k256 0.14.0`; the selected normal dependency graph uses `crypto-bigint 0.7.10`,
+within the patched range for [RUSTSEC-2026-0387](https://rustsec.org/advisories/RUSTSEC-2026-0387.html).
+The older development-only graph remains disclosed in the completion record.
+The 6 November OSV query found no entries for the 53 selected normal runtime
+packages; this scoped lookup is not a security audit or release acceptance.
+
+Byte copies charge their bounded output length before allocation, in addition
+to existing instruction/operand charges. Verification charges a local candidate
+3,000 gas before crypto, including invalid signatures. All charges reach the
+same live external fuel sink. These test prices do not establish production
+gas economics.
+
+### Native payload and read-only calls
+
+```lithic
+let result: bytes = invoke_payload(target, value, payload);
+let checked: bytes = invoke_static_payload(verifier, 0, payload);
+```
+
+Payload is the full 32-byte native selector followed by one canonical LVAL
+argument envelope. Results are a canonical LVAL envelope containing the typed
+return value. Source bindings must be immutable `bytes`; calls occupy statement
+opcodes 16 and 17, gated on bytecode v16. Malformed envelopes, unknown selectors,
+wrong argument types, unsupported targets and failed calls fail the enclosing
+transaction. The encoded return envelope itself must fit the 4,096-byte binary
+value limit; larger returns fail atomically rather than being truncated.
+
+Read-only mode is set by the caller and inherited by every descendant. Native
+writes, map writes, events, transfers, creation and deferred legacy calls are
+rejected. Typed or payload calls cannot turn off the inherited mode or send
+value. Successful views do not persist implicit zero/empty storage defaults,
+including through the direct VM interface. Host state and balances are not
+committed by read-only frames. Existing depth and reentrancy guards still apply.
+These are native calls; no EVM calldata adapter or EIP-1271 support is added.
+
+### Executable account engineering fixture
+
+[`lep10015_native_account_candidate.lithic`](../sdk/contracts/standards/lep10015_native_account_candidate.lithic)
+is generated deterministically by
+[`generate_native_account_candidate.py`](../scripts/generate_native_account_candidate.py).
+It compiles and executes the following locally:
+
+- Canonical transaction/signature ABI arrays, bounded to 16 calls/signers and
+  4,096 bytes per transaction or signature bundle; general `Vec`/struct syntax
+  remains unsupported. Aggregate byte bounds can be stricter than element counts.
+- Key and native contract signers; strict signatures, unique credentials,
+  sorted unique signer IDs, current threshold and fresh policy-epoch binding.
+- Domain/account/chain binding, signed metadata, validity windows, checked u256
+  nonces, direct signed execution, reserved proposals and out-of-order execution.
+- On-chain approvals and revocation tombstones. Explicit reapproval may count
+  again without restoring a revoked off-chain signature.
+- Atomic native transfers and native contract/token calls, source-order events,
+  rollback on failure/OOG and recovery of an already reserved proposal.
+- Threshold changes, signer addition/removal/replacement and cancellation only
+  through threshold-authorized self-dispatch. Public administrative methods
+  reject external owners. Signer IDs are never reused; configuration changes
+  increment the authorization epoch and invalidate stale-policy proposals.
+- Native contract signature verification through transitive read-only calls,
+  requiring exact canonical bool true, with no verifier state/log/value effects.
+
+The initializer consumes a canonical ABI `(address,uint16)[]` descriptor array
+inside its native `bytes` argument. Administrative native selectors use the
+fixture's declared u64 operands and strict limits. They are not a certified
+draft-u32 interface or the existing Litho Vault EVM interface.
+
+The exact proposed signing vectors remain unchanged at SHA-256
+`8fbc504280a07902d1b9bdc1517061c35dee1f708e8b938f879dcf5d31fc8c45`.
+Both digest vectors, their key signatures and derived signer IDs pass through
+the compiler/runtime. This proves behavior against proposed fixtures, not a
+maintainer decision, official conformance or a chain deployment. The proposal
+in [official PR #14](https://github.com/KaJLabs/Lithic/pull/14) still needs its
+hash-bound maintainer decision before interoperability can be claimed.
+
+This fixture rejects STATIC_CALL transaction operations, delegate calls,
+EVM/EIP-1271 adapters and unassigned/native-PQ algorithms. It does not implement
+guardian recovery, agents/AI policies or a detached nested-account signature
+format. Their required status and exact profile must follow the authoritative
+standards decision; they are not silently treated as implemented. The native
+FFI chain harness remains nonpayable, so in-memory native-value tests do not
+establish native custody on the chain. `lithdev` continues to reject v16 intents
+for the documented Makalu v14 profile.
+
+### Code admission and deployment budget
+
+The current account compiles to **23,924 bytecode bytes**, below the 65,536-byte
+code-admission bound. This is not a deployability or affordability guarantee.
+The current FFI contract record serializes bytecode as hex, requiring at least
+47,850 value bytes for that field alone. Under the unchanged disabled-candidate
+growth formula (20,000 gas per additional rounded 32-byte allocation unit),
+code alone therefore needs at least **29,920,000 growth gas**, exceeding the
+current 10M native test envelope before write, key, VM or other state charges.
+This is an offline lower bound, not a keeper benchmark result. Final pricing,
+cap/layout policy and chain compatibility remain separate required gates;
+local tests do not clear this known admission-versus-deployability gap.

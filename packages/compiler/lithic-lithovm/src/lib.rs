@@ -527,6 +527,45 @@ impl BodyParser<'_> {
         self.skip_whitespace();
         self.expect_byte(b'=', "expected '=' in local binding")?;
         self.skip_whitespace();
+        let payload_read_only = self.consume_keyword("invoke_static_payload");
+        if payload_read_only || self.consume_keyword("invoke_payload") {
+            if mutable || annotated_type != Some(ValueType::Bytes) {
+                return Err("payload call requires an immutable bytes result binding".into());
+            }
+            self.skip_whitespace();
+            self.expect_byte(b'(', "expected '(' after payload call")?;
+            let source = self.take_expression_until(b')')?.to_owned();
+            self.skip_whitespace();
+            self.expect_byte(b';', "expected ';' after payload call")?;
+            let parts = split_arguments(&source)?;
+            if parts.len() != 3 {
+                return Err("payload call requires target, value and payload".into());
+            }
+            let mut operands = parts
+                .iter()
+                .map(|p| self.compile_expression(p))
+                .collect::<Result<Vec<_>, _>>()?;
+            for (operand, ty) in
+                operands
+                    .iter_mut()
+                    .zip([ValueType::Address, ValueType::U256, ValueType::Bytes])
+            {
+                coerce_expression(operand, ty)?;
+            }
+            if self.local_names.len() >= MAX_LOCALS {
+                return Err("too many local bindings".into());
+            }
+            self.local_names.push(name);
+            self.local_types.push(ValueType::Bytes);
+            self.local_mutability.push(false);
+            let mut operands = operands.into_iter();
+            return Ok(Statement::PayloadInvoke {
+                read_only: payload_read_only,
+                target: operands.next().unwrap().0,
+                value: operands.next().unwrap().0,
+                payload: operands.next().unwrap().0,
+            });
+        }
         let creation = self.consume_keyword("create_contract");
         if creation || self.consume_keyword("invoke") {
             if mutable {
@@ -542,7 +581,7 @@ impl BodyParser<'_> {
             let source = self.take_expression_until(b')')?.to_owned();
             self.skip_whitespace();
             self.expect_byte(b';', "expected ';' after host operation")?;
-            let parts = source.split(',').collect::<Vec<_>>();
+            let parts = split_arguments(&source)?;
             let operand_types = if creation {
                 vec![
                     ValueType::Address,
@@ -1221,6 +1260,7 @@ enum ExprToken {
     RParen,
     LBracket,
     RBracket,
+    Comma,
     Plus,
     Minus,
     Star,
@@ -1392,21 +1432,48 @@ impl<'a> ExpressionParser<'a> {
                 ValueType::Bool,
             )),
             ExprToken::Ident(name) => {
-                if name == "keccak256" && self.eat(&ExprToken::LParen) {
+                if let Some((instruction, expected, result)) =
+                    intrinsic(&name).filter(|_| self.current() == &ExprToken::LParen)
+                {
+                    if !self.eat(&ExprToken::LParen) {
+                        return Err(format!("{name} requires parentheses"));
+                    }
                     if self.depth >= MAX_EXPRESSION_DEPTH {
                         return Err(format!("return expression exceeds maximum nesting depth {MAX_EXPRESSION_DEPTH}"));
                     }
                     self.depth += 1;
-                    let (mut code, ty) = self.parse_equality()?;
+                    let mut code = Vec::new();
+                    for (index, expected_type) in expected.iter().enumerate() {
+                        if index > 0 && !self.eat(&ExprToken::Comma) {
+                            return Err(format!(
+                                "{name} requires exactly {} arguments",
+                                expected.len()
+                            ));
+                        }
+                        let (argument, ty) = self.parse_equality()?;
+                        if name == "word_bytes" {
+                            if matches!(ty, ValueType::String | ValueType::Bytes) {
+                                return Err("word_bytes requires a scalar word".into());
+                            }
+                        } else if ty != *expected_type {
+                            return Err(format!(
+                                "{name} argument {} requires {}, found {}",
+                                index + 1,
+                                expected_type.name(),
+                                ty.name()
+                            ));
+                        }
+                        code.extend(argument);
+                    }
                     self.depth -= 1;
-                    if ty != ValueType::Bytes {
-                        return Err("runtime keccak256 requires a bytes argument".to_string());
-                    }
                     if !self.eat(&ExprToken::RParen) {
-                        return Err("runtime keccak256 requires exactly one argument".to_string());
+                        return Err(format!(
+                            "{name} requires exactly {} arguments",
+                            expected.len()
+                        ));
                     }
-                    code.push(Instruction::Keccak256);
-                    return Ok((code, ValueType::Bytes32));
+                    code.push(instruction);
+                    return Ok((code, result));
                 }
                 if let Some((instruction, value_type)) = match name.as_str() {
                     "msg.sender" => Some((Instruction::MessageSender, ValueType::Address)),
@@ -1414,6 +1481,7 @@ impl<'a> ExpressionParser<'a> {
                     "block.height" => Some((Instruction::BlockHeight, ValueType::U64)),
                     "block.timestamp" => Some((Instruction::BlockTimestamp, ValueType::U64)),
                     "chain.id" => Some((Instruction::ChainId, ValueType::U64)),
+                    "contract.address" => Some((Instruction::ContractAddress, ValueType::Address)),
                     _ => None,
                 } {
                     return Ok((vec![instruction], value_type));
@@ -1530,6 +1598,55 @@ const MAX_EXPRESSION_SOURCE_BYTES: usize = 65_536;
 const MAX_EXPRESSION_TOKENS: usize = 4_096;
 const MAX_EXPRESSION_DEPTH: usize = 128;
 
+fn intrinsic(name: &str) -> Option<(Instruction, &'static [ValueType], ValueType)> {
+    use ValueType::*;
+    Some(match name {
+        "keccak256" => (Instruction::Keccak256, &[Bytes], Bytes32),
+        "bytes_len" => (Instruction::BytesLen, &[Bytes], U64),
+        "bytes_concat" => (Instruction::BytesConcat, &[Bytes, Bytes], Bytes),
+        "bytes_slice" => (Instruction::BytesSlice, &[Bytes, U64, U64], Bytes),
+        "bytes_get" => (Instruction::BytesGet, &[Bytes, U64], U64),
+        // The argument is polymorphic over the validated scalar word types.
+        "word_bytes" => (Instruction::WordBytes, &[Bytes32], Bytes),
+        "bytes_word" => (Instruction::BytesWord, &[Bytes], Bytes32),
+        "word_address" => (Instruction::WordAddress, &[Bytes32], Address),
+        "word_u64" => (Instruction::WordU64, &[Bytes32], U64),
+        "word_u256" => (Instruction::WordU256, &[Bytes32], U256),
+        "secp256k1_verify" => (
+            Instruction::Secp256k1Verify,
+            &[Bytes32, Bytes, Address],
+            Bool,
+        ),
+        _ => return None,
+    })
+}
+
+fn split_arguments(source: &str) -> Result<Vec<&str>, String> {
+    let mut stack = Vec::new();
+    let mut parts = Vec::new();
+    let mut start = 0;
+    for (offset, byte) in source.bytes().enumerate() {
+        match byte {
+            b'(' | b'[' => stack.push(byte),
+            b')' | b']' => {
+                if stack.pop() != Some(if byte == b')' { b'(' } else { b'[' }) {
+                    return Err("unbalanced host argument delimiters".into());
+                }
+            }
+            b',' if stack.is_empty() => {
+                parts.push(&source[start..offset]);
+                start = offset + 1;
+            }
+            _ => {}
+        }
+    }
+    if !stack.is_empty() {
+        return Err("unbalanced host argument delimiters".into());
+    }
+    parts.push(&source[start..]);
+    Ok(parts)
+}
+
 fn require_u64_pair(left: ValueType, right: ValueType, operation: &str) -> Result<(), String> {
     if left != ValueType::U64 || right != ValueType::U64 {
         return Err(format!("{operation} currently requires two u64 operands"));
@@ -1645,6 +1762,7 @@ fn lex_expression(source: &str) -> Result<Vec<ExprToken>, String> {
             b')' => ExprToken::RParen,
             b'[' => ExprToken::LBracket,
             b']' => ExprToken::RBracket,
+            b',' => ExprToken::Comma,
             b'+' => ExprToken::Plus,
             b'-' => ExprToken::Minus,
             b'*' => ExprToken::Star,
@@ -1995,6 +2113,8 @@ mod tests {
         let context = ExecutionContext {
             caller,
             value: word_from_u64(25),
+            read_only: false,
+            contract: [0; 32],
             block_height: 91,
             block_timestamp: 1_725_000_000,
             chain_id: 9005,

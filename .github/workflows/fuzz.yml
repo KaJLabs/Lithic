@@ -8,6 +8,9 @@ on:
       - "packages/vm/bytecode/**"
       - "packages/vm/lithovm/**"
       - "packages/vm/lithovm-host/**"
+      - "packages/standards/lep100-tests/**"
+      - "sdk/contracts/standards/**"
+      - "scripts/generate_native_account_candidate.py"
       - ".github/workflows/fuzz.yml"
   workflow_dispatch:
   schedule:
@@ -22,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [bytecode_decode, compiler_runtime, stateful_maps, synchronous_calls, child_creation, binary_values]
+        target: [bytecode_decode, compiler_runtime, stateful_maps, synchronous_calls, child_creation, binary_values, account_authorization]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - run: rustup toolchain install nightly --profile minimal

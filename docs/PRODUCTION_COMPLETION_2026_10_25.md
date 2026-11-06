@@ -64,6 +64,11 @@ change those historical archive hashes.
 Update 6 November, separate development branch: bounded binary `bytes` and
 runtime Keccak-256 now have a compiler-to-host/FFI implementation under
 [native bytecode v15](LITHOVM_DYNAMIC_VALUES_V1.md#binary-values-and-runtime-hashing-candidate-2026-11-06).
+The same branch's [v16 extension](LITHOVM_DYNAMIC_VALUES_V1.md#account-primitives-and-proposed-base-account-candidate-v16)
+adds byte operations, strict signatures, native payload/read-only calls and an
+executable proposed base account with nonce, threshold, revocation, governance
+and atomic native call/token-custody tests. It processes bounded ABI arrays;
+general source `Vec`/struct syntax and guardian recovery remain unsupported.
 The reviewed release and benchmark candidate remain unchanged. These primitives
 are groundwork for native smart accounts; they do not establish LEP100-15
 conformance. The canonical signing profile/vectors have been submitted in
@@ -83,7 +88,7 @@ historical.
 | Failure/recovery and gas | OOG/revert rollback, shared live FFI fuel accounting, bounded effects and recovery tests | Final workload/state-size evidence and accepted cap/growth/economics; preserve accepted LTH-10 frame-burn behavior in integrator guidance |
 | ABI/deployment tooling | Atomic deployment/initialization, caller-bound child salts, strict selectors/typed envelopes, packaged lithdev intent preparation and decoding | Wallet/RPC execution, authenticated code/runtime checks and final integration acceptance against the chain build |
 | LEP100 reference profile | Executable balances/allowances/transfer/burn fixtures and rollback tests | Final reference-token and allocation/deployment work belongs to the separate LAX session |
-| LEP100-15 | Proposed canonical signing profile/vectors in official PR #14; separate local binary/hash primitives | Maintainer decision, remaining native signing/account primitives and native smart-account implementation/conformance; no conformance claim yet |
+| LEP100-15 | Proposed profile/vectors in PR #14; separate local v16 primitives and executable proposed native base-account fixture | Maintainer decision, authoritative account/interface and recovery scope, remaining required language/profile behavior and official conformance/security acceptance; no conformance claim yet |
 | Makalu | Separate 23 October activation evidence, described below | Final selected-source compatibility and required authenticated end-to-end failure/recovery evidence; no mainnet acceptance inferred |
 | litho.finance and LithoScan | Gateway preparation/codec vectors, source rebuild verifier, host deployment journal and included-status mapper | Final installed frontend/indexer/verification and trusted status/finality acceptance |
 | Fuzzing/security/release | Existing fuzz targets/campaign evidence, dependency scope check, native-platform CI and identical rebuilds | Final-source independent security review, approved signing/provenance and publication/rollout decision |
@@ -110,7 +115,7 @@ clear those advisories or establish security acceptance.
 | Area | Required closure | Current boundary |
 | --- | --- | --- |
 | Language/runtime support | Freeze the supported production language/ABI profile and reject all unsupported semantics; resolve required collection/operation gaps against real integration cases | Typed maps, strings and synchronous calls/creation are implemented; general arrays and other documented unsupported forms must not be advertised as implemented |
-| LEP100-15 | Obtain the maintainers' hash-bound profile/vector decision, implement/review native account semantics and pass positive/negative replay/threshold/atomicity tests | PR #14 remains proposed. Binary/hash primitives do not implement signature verification or an account. An EVM vault's own suite does not establish native conformance |
+| LEP100-15 | Obtain the maintainers' hash-bound decision, finalize the authoritative language/account/interface and recovery scope, and pass official native conformance and security review | PR #14 remains proposed. The v16 fixture exercises signatures, thresholds, nonce lifecycle, revocation, native contract signers, governance and atomic calls locally; general Vec/struct syntax, guardian recovery and detached nested-account signatures remain unsupported. Its 23,924-byte code alone exceeds the current 10M candidate envelope under unchanged hex-record growth pricing; no deployability or conformance claim |
 | Validator performance/economics | Complete the authorized sustained workload/state-size matrix, derive resource/state-growth budgets and approve cap/gas policy | The accepted 25M slice is limited evidence. The full 50M benchmark remains failed and unaccepted. R6.4 bounded-diagnostic evidence review is complete: independent offline replay with the unmodified pinned checker verified all 168 raw artifacts and 76 private snapshots and matched the server/preserved replay results. Its missing-evidence condition is closed. Unique root cause and physical-storage durability remain unestablished. No new workload, retry or production action is authorized |
 | Chain compatibility/integration | Match accepted compiler/runtime/library pins to the chain build and complete authenticated deployment/calls, rollback/OOG/recovery, verification/status and client end-to-end evidence | Makalu native activation has separate evidence; token-specific rehearsal belongs to the LAX session. Mainnet activation is not established by local release tooling |
 | Security and release | Review current dependency/SBOM and fuzz/coverage evidence, close findings against the final source, verify approved signing/provenance and authorize publication/rollout | Native-platform rebuild/package and Rust checks pass at the source pin above; unsigned CI candidates and dependency scope evidence are available. Independent reproduction, signing and final security acceptance remain open |

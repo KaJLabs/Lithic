@@ -13,6 +13,8 @@ pub(super) fn execute<T: StateTransaction>(
     active: &mut Vec<Address>,
 ) -> Result<(ExecutionResult<Value>, u64), HostFailure> {
     let context = ExecutionContext {
+        read_only: frame.read_only,
+        contract: frame.contract,
         caller: frame.caller,
         value: frame.value,
         block_height: frame.block_height,
@@ -45,7 +47,9 @@ pub(super) fn execute<T: StateTransaction>(
     match outcome {
         ExecutionOutcome::Success(result) => {
             let gas = result.gas_used;
-            store_contract(adapter.state, frame.contract, contract, gas)?;
+            if !frame.read_only {
+                store_contract(adapter.state, frame.contract, contract, gas)?;
+            }
             Ok((result, gas))
         }
         ExecutionOutcome::Failure(failure) => {
@@ -180,6 +184,8 @@ impl<T: StateTransaction> Adapter<'_, T> {
             });
             let result = self.invoke_inner(
                 NativeInvocation {
+                    read_only: false,
+                    raw_result: false,
                     target: address,
                     selector: request.initializer,
                     value: request.value,
@@ -256,6 +262,15 @@ impl<T: StateTransaction> Adapter<'_, T> {
         request: NativeInvocation,
         storage: &Storage,
     ) -> Result<InvocationResult, HostFailure> {
+        let read_only = self.context.read_only || request.read_only;
+        if read_only && request.value != [0; 32] {
+            return Err(HostFailure {
+                kind: HostFailureKind::Vm(FailureKind::Trap),
+                message: "read-only call cannot transfer value".into(),
+                gas_used: 0,
+                failed_contract: request.target,
+            });
+        }
         if self.active.contains(&request.target) {
             return Err(HostFailure {
                 kind: HostFailureKind::Reentrancy,
@@ -282,7 +297,7 @@ impl<T: StateTransaction> Adapter<'_, T> {
             failed_contract: request.target,
         })?;
         let definition = program.functions.iter().find(|f| f.name == function);
-        if !definition.is_some_and(|f| f.return_type == request.return_type) {
+        if !definition.is_some_and(|f| request.raw_result || f.return_type == request.return_type) {
             return Err(HostFailure {
                 kind: HostFailureKind::InvalidEntrypoint,
                 message: "invoke return type does not match callee".into(),
@@ -292,9 +307,14 @@ impl<T: StateTransaction> Adapter<'_, T> {
         }
         let mut caller = self.template.clone();
         caller.storage = storage.clone();
-        store_contract(self.state, self.address, caller, 0)?;
-        self.transfer_value(request.target, request.value)?;
+        if !self.context.read_only {
+            store_contract(self.state, self.address, caller, 0)?;
+        }
+        if !read_only {
+            self.transfer_value(request.target, request.value)?;
+        }
         let frame = FrameRequest {
+            read_only,
             contract: request.target,
             function,
             arguments: request.arguments,
