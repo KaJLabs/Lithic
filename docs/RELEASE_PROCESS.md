@@ -91,6 +91,8 @@ than be waived by the packaging script.
 
 The separate `release-checks.yml` workflow runs native Linux, Windows and macOS
 rebuild comparisons and packaged execution checks for compiler/runtime PRs.
+The Apple Silicon build host is `macos-15`; GitHub retired the `macos-14`
+Actions images on 2 November 2026 ([runner-image notice](https://github.com/actions/runner-images)).
 It retains unsigned candidates with their embedded source/build/smoke evidence.
 PR builds check out the selected head commit directly, rather than a synthetic
 CI merge. The review packet must include that exact build commit and its tree
