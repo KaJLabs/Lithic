@@ -90,25 +90,73 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(record['status'],'FAILED_REBUILD_NOT_A_RELEASE')
             self.assertEqual(set(record['differences']),{'bin/lithc'})
 
-    def files(self, target):
+    def files(self, target, profile=release.LEGACY_SMOKE_PROFILE):
         names = set(release.artifact_names(target).values()) | {
             'include/lithovm.h', 'sbom.cdx.json', 'Cargo.lock', 'source-manifest.json',
             'build-evidence.json', 'smoke-evidence.json'}
         files = {n: n.encode() for n in names}
+        if profile == release.ACCOUNT_SMOKE_PROFILE:
+            for name in (release.ACCOUNT_SOURCE, release.SIGNATURE_SOURCE, release.SIGNATURE_VECTOR):
+                files[name] = name.encode()
         files['manifest.json'] = release.canonical({'schema_version': 1, 'version': 'lithic-vtest',
-            'target': target, 'files': {n: {'sha256': release.sha(raw), 'bytes': len(raw)}
+            'target': target, 'smoke_profile': profile,
+            'files': {n: {'sha256': release.sha(raw), 'bytes': len(raw)}
                                        for n, raw in files.items()}})
         return files
 
+    def test_account_profile_requires_its_sources_and_pinned_vector(self):
+        for name in (release.ACCOUNT_SOURCE, release.SIGNATURE_SOURCE, release.SIGNATURE_VECTOR):
+            files = self.files('x86_64-unknown-linux-gnu', release.ACCOUNT_SMOKE_PROFILE)
+            del files[name]
+            manifest = json.loads(files['manifest.json'])
+            del manifest['files'][name]
+            files['manifest.json'] = release.canonical(manifest)
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'required'):
+                release.verify_archive(release.archive_bytes(files, 1700000000))
+
+    def test_smoke_profiles_are_explicit_and_old_archives_still_verify(self):
+        files = self.files('x86_64-unknown-linux-gnu')
+        manifest = json.loads(files['manifest.json'])
+        del manifest['smoke_profile']
+        files['manifest.json'] = release.canonical(manifest)
+        release.verify_archive(release.archive_bytes(files, 1700000000))
+        manifest['smoke_profile'] = 'unknown-profile'
+        files['manifest.json'] = release.canonical(manifest)
+        with self.assertRaisesRegex(ValueError, 'smoke profile'):
+            release.verify_archive(release.archive_bytes(files, 1700000000))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'manifest.json').write_bytes(release.canonical({
+                'smoke_profile': release.ACCOUNT_SMOKE_PROFILE}))
+            with self.assertRaisesRegex(ValueError, 'contradicts'):
+                release.smoke(root, release.artifact_names('x86_64-unknown-linux-gnu'),
+                              release.LEGACY_SMOKE_PROFILE)
+
+    def test_account_smoke_retains_vector_pin_without_private_key_fields(self):
+        source = {name: (release.ROOT / name).read_bytes()
+                  for name in (release.ACCOUNT_SOURCE, release.VECTORS_SOURCE)}
+        files = release.account_smoke_inputs(source)
+        self.assertEqual(files[release.ACCOUNT_SOURCE], source[release.ACCOUNT_SOURCE])
+        vector = json.loads(files[release.SIGNATURE_VECTOR])
+        self.assertEqual(set(vector), {'digest', 'signature', 'address', 'source_vectors_sha256'})
+        self.assertEqual(vector['source_vectors_sha256'], release.VECTORS_SHA256)
+        self.assertEqual(len(bytes.fromhex(vector['signature'][2:])), 65)
+        source[release.VECTORS_SOURCE] += b'\n'
+        with self.assertRaisesRegex(ValueError, 'pin changed'):
+            release.account_smoke_inputs(source)
+
     def test_archive_deterministic_and_complete_for_all_release_targets(self):
         for target in ('x86_64-unknown-linux-gnu', 'aarch64-apple-darwin', 'x86_64-pc-windows-msvc'):
-            with self.subTest(target=target):
-                files = self.files(target)
-                first = release.archive_bytes(files, 1700000000, windows='windows' in target)
-                second = release.archive_bytes(dict(reversed(list(files.items()))), 1700000000,
-                                               windows='windows' in target)
-                self.assertEqual(first, second)
-                self.assertEqual(release.verify_archive(first)['target'], target)
+            for profile in (release.LEGACY_SMOKE_PROFILE, release.ACCOUNT_SMOKE_PROFILE):
+                with self.subTest(target=target, profile=profile):
+                    files = self.files(target, profile)
+                    first = release.archive_bytes(files, 1700000000, windows='windows' in target)
+                    second = release.archive_bytes(dict(reversed(list(files.items()))), 1700000000,
+                                                   windows='windows' in target)
+                    self.assertEqual(first, second)
+                    manifest = release.verify_archive(first)
+                    self.assertEqual(manifest['target'], target)
+                    self.assertEqual(manifest['smoke_profile'], profile)
 
     def test_missing_runtime_or_verifier_and_modified_payload_rejected(self):
         for mutation in ('runtime', 'verifier', 'devtools', 'modified', 'extra'):

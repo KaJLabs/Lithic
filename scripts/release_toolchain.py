@@ -26,10 +26,24 @@ SMOKE = b'''contract ReleaseSmoke {
     pub fn answer() -> u64 { return 42; }
 }
 '''
+LEGACY_SMOKE_PROFILE = 'native-v11-v1'
+ACCOUNT_SMOKE_PROFILE = 'native-account-v17-v1'
+ACCOUNT_SOURCE = 'sdk/contracts/standards/lep10015_native_account_candidate.lithic'
+SIGNATURE_SOURCE = 'smoke/signature.lithic'
+SIGNATURE_VECTOR = 'smoke/signature-vector.json'
+VECTORS_SOURCE = 'packages/standards/lep100-tests/fixtures/proposed-signing-vectors.json'
+VECTORS_SHA256 = '8fbc504280a07902d1b9bdc1517061c35dee1f708e8b938f879dcf5d31fc8c45'
+SIGNATURE_SMOKE = b'''contract ReleaseSignatureSmoke {
+    pub fn verify(digest: bytes32, signature: bytes, signer: address) -> bool {
+        require(bytes_len(signature) == 65);
+        return secp256k1_verify(digest, signature, signer);
+    }
+}
+'''
 DOCS = ('README.md', 'LICENSE', 'docs/IMPLEMENTATION_STATUS.md',
         'docs/RELEASE_PROCESS.md', 'docs/LEP100_15_IMPLEMENTATION_DECISIONS.md',
         'docs/LTH_R3_RATIFICATION_2026_10_01.md', 'docs/PRODUCTION_COMPLETION_2026_10_25.md',
-        'docs/LITHDEV_NATIVE_PREPARATION.md')
+        'docs/LITHDEV_NATIVE_PREPARATION.md', 'docs/LITHOVM_DYNAMIC_VALUES_V1.md')
 
 
 def sha(raw):
@@ -38,6 +52,19 @@ def sha(raw):
 
 def canonical(value):
     return (json.dumps(value, sort_keys=True, indent=2) + '\n').encode()
+
+
+def account_smoke_inputs(source):
+    vectors = source[VECTORS_SOURCE]
+    if sha(vectors) != VECTORS_SHA256:
+        raise ValueError('proposed signature-vector pin changed; review smoke fixture')
+    vector = json.loads(vectors)['vectors'][0]
+    signature = vector['signatures'][0]
+    # Public test material only. Do not ship the fixture's private-key fields.
+    return {ACCOUNT_SOURCE: source[ACCOUNT_SOURCE], SIGNATURE_SOURCE: SIGNATURE_SMOKE,
+            SIGNATURE_VECTOR: canonical({'source_vectors_sha256': VECTORS_SHA256,
+                'digest': vector['digest'], 'signature': signature['signature'],
+                'address': signature['address']})}
 
 
 def run(argv, *, cwd=ROOT, env=None):
@@ -239,12 +266,25 @@ def verify_archive(raw):
     required = set(artifact_names(manifest['target']).values()) | {
         'include/lithovm.h', 'sbom.cdx.json', 'Cargo.lock', 'source-manifest.json',
         'build-evidence.json', 'smoke-evidence.json'}
+    profile = manifest.get('smoke_profile', LEGACY_SMOKE_PROFILE)
+    if profile == ACCOUNT_SMOKE_PROFILE:
+        required.update((ACCOUNT_SOURCE, SIGNATURE_SOURCE, SIGNATURE_VECTOR))
+    elif profile != LEGACY_SMOKE_PROFILE:
+        raise ValueError('unsupported release smoke profile')
     if not required <= set(files):
         raise ValueError('release is missing a required compiler/runtime artifact')
     return manifest
 
 
-def smoke(package_dir, names):
+def smoke(package_dir, names, profile=None):
+    manifest_path = package_dir / 'manifest.json'
+    declared = (json.loads(manifest_path.read_bytes()).get('smoke_profile', LEGACY_SMOKE_PROFILE)
+                if manifest_path.is_file() else None)
+    if declared is not None and profile is not None and declared != profile:
+        raise ValueError('requested smoke profile contradicts the package')
+    profile = profile or declared or LEGACY_SMOKE_PROFILE
+    if profile not in (LEGACY_SMOKE_PROFILE, ACCOUNT_SMOKE_PROFILE):
+        raise ValueError('unsupported release smoke profile')
     compiler = package_dir / names['lithc.exe' if os.name == 'nt' else 'lithc']
     source = package_dir / 'release-smoke.lithic'
     artifact = json.loads(run([str(compiler), '--emit', 'lithovm', str(source)], cwd=package_dir))
@@ -300,7 +340,10 @@ def smoke(package_dir, names):
         try:
             if rc or callback_errors:
                 raise ValueError('packaged native FFI execution failed')
-            return json.loads(ctypes.string_at(output.data, output.len))
+            if not output.data or output.len > 2 * 1024 * 1024:
+                raise ValueError('invalid packaged native FFI output buffer')
+            result = json.loads(ctypes.string_at(output.data, output.len))
+            return result
         finally:
             library.lithovm_free_v1(output)
     deployed = invoke(request)
@@ -344,13 +387,157 @@ def smoke(package_dir, names):
                               str(code_file)], capture_output=True)
     if tampered.returncode == 0:
         raise ValueError('packaged verifier accepted modified bytecode')
-    return {'compiler_runtime_deploy_call': 'PASS', 'answer': 42,
+    evidence = {'smoke_profile': profile, 'compiler_runtime_deploy_call': 'PASS', 'answer': 42,
             'lithdev_unsigned_deploy_call_preparation': 'PASS',
             'lithdev_native_result_decode': 'PASS',
             'ffi_v2_fuel_callback': 'PASS', 'invalid_call_no_effects': 'PASS',
             'source_verifier': 'PASS', 'modified_code_rejected': 'PASS',
             'source_hash': artifact['sourceHash'], 'code_hash': verified['rebuiltCodeHash'],
             'scope': 'local packaged native library; no chain registration or deployment'}
+    if profile == ACCOUNT_SMOKE_PROFILE:
+        evidence['native_account_v17'] = account_smoke(package_dir, compiler, verifier,
+                                                     dev, invoke, state, charges)
+    return evidence
+
+
+def account_smoke(package, compiler, verifier, dev, invoke, state, charges):
+    """Exercise the packaged v17 compiler/FFI, not binaries from a build tree."""
+    def word(n):
+        return n.to_bytes(32, 'big')
+
+    def arguments(*values):
+        version = 2 if any(tag == 7 for tag, _ in values) else 1
+        result = b'LVAL' + bytes([version]) + len(values).to_bytes(2, 'big')
+        for tag, value in values:
+            if (tag == 7 and len(value) > 4096) or (tag != 7 and len(value) != 32):
+                raise ValueError('invalid release smoke argument')
+            result += bytes([tag]) + (len(value).to_bytes(2, 'big') if tag == 7 else b'') + value
+        return '0x' + result.hex()
+
+    def apply(result):
+        if result.get('success') is not True:
+            raise ValueError('packaged v17 operation failed')
+        for write in result['writes']:
+            if write.get('delete'):
+                state.pop(write['key'], None)
+            else:
+                state[write['key']] = bytes.fromhex(write['value'][2:])
+
+    def rejected(result):
+        if result.get('success') is not False or any(result[n] for n in ('writes', 'events', 'deployments')):
+            raise ValueError('packaged v17 failure leaked effects')
+
+    account_file = package / ACCOUNT_SOURCE
+    source = account_file.read_bytes()
+    artifact = json.loads(run([str(compiler), '--emit', 'lithovm', str(account_file)], cwd=package))
+    if artifact['bytecodeVersion'] != 17 or artifact['target'] != 'lithovm-native-v17':
+        raise ValueError('packaged account did not select the v17 runtime')
+    bytecode = bytes.fromhex(artifact['bytecode'][2:])
+    signers = ['7e5f4552091a69125d5dfcb7b8c2659029395bdf',
+               '2b5ad5c4795c026514f8317c7a215e218dccd6cf']
+    descriptors = word(32) + word(2)
+    for signer in signers:
+        descriptors += bytes(12) + bytes.fromhex(signer) + word(1)
+    initializer = arguments((7, descriptors), (1, word(2)))
+    deploy = {'version': 1, 'operation': 'deploy', 'caller': '0x' + '11' * 20,
+              'bytecode': artifact['bytecode'], 'function': 'initialize', 'arguments': initializer,
+              'nonce': 1, 'gas_limit': 10_000_000, 'chain_id': 700780,
+              'block_height': 1, 'block_timestamp': 100}
+    before = len(charges)
+    deployed = invoke(deploy)
+    apply(deployed)
+    if len(deployed['deployments']) != 1 or sum(charges[before:]) != int(deployed['gasUsed']):
+        raise ValueError('packaged v17 deployment/live fuel mismatch')
+    address = deployed['deployments'][0]['contract']
+    key = 'lithovm/v1/contracts/' + address[2:]
+    original_record = state[key]
+    if not original_record.startswith(b'LCTR\x03'):
+        raise ValueError('packaged v17 account did not persist a binary record')
+    call = {k: v for k, v in deploy.items() if k not in ('bytecode', 'function', 'arguments')}
+    call.update(operation='call', contract=address, nonce=2)
+    for name, tag, expected in [('threshold', 1, 2), ('signer_count', 1, 2), ('nonce', 2, 0)]:
+        result = invoke({**call, 'function': name, 'arguments': arguments()})
+        if result.get('success') is not True or result['result'] != arguments((tag, word(expected))):
+            raise ValueError('packaged v17 persisted view mismatch: ' + name)
+        apply(result)
+    signer_id = invoke({**call, 'function': 'signer_id',
+                        'arguments': arguments((4, bytes(12) + bytes.fromhex(signers[0])))})
+    if signer_id.get('success') is not True:
+        raise ValueError('packaged v17 signer map reload failed')
+    returned = bytes.fromhex(signer_id['result'][2:])
+    if len(returned) != 40 or returned[:8] != b'LVAL\x01\x00\x01\x05' or returned[8:] == bytes(32):
+        raise ValueError('packaged v17 signer ID is invalid')
+    apply(signer_id)
+    if state[key] != original_record:
+        raise ValueError('packaged account views changed its record')
+    rejected(invoke({**call, 'function': 'set_threshold', 'arguments': arguments((1, word(1)))}))
+    rejected(invoke({**call, 'function': 'initialize', 'arguments': initializer}))
+    exhausted = invoke({**call, 'function': 'nonce', 'arguments': arguments(), 'gas_limit': 1})
+    rejected(exhausted)
+    if exhausted['kind'] != 'Vm(OutOfGas)' or exhausted['gasUsed'] != '1':
+        raise ValueError('packaged v17 OOG was misclassified')
+    # Tamper only local fixture state, then restore it before the recovery call.
+    damaged = bytearray(original_record)
+    damaged[9 + len(bytecode)] ^= 1
+    state[key] = bytes(damaged)
+    try:
+        corrupted = invoke({**call, 'function': 'nonce', 'arguments': arguments()})
+        rejected(corrupted)
+        if 'stored code hash mismatch' not in corrupted['message']:
+            raise ValueError('packaged record corruption failed at the wrong boundary')
+    finally:
+        state[key] = original_record
+    recovered = invoke({**call, 'function': 'threshold', 'arguments': arguments()})
+    if recovered.get('success') is not True or recovered['result'] != arguments((1, word(2))):
+        raise ValueError('packaged v17 failed to recover after rejected operations')
+
+    # Use the published public digest/signature against the actual packaged crypto.
+    vector = json.loads((package / SIGNATURE_VECTOR).read_bytes())
+    if vector['source_vectors_sha256'] != VECTORS_SHA256:
+        raise ValueError('packaged signature-vector provenance mismatch')
+    verifier_artifact = json.loads(run([str(compiler), '--emit', 'lithovm',
+        str(package / SIGNATURE_SOURCE)], cwd=package))
+    deployed_verifier = invoke({**deploy, 'bytecode': verifier_artifact['bytecode'],
+        'function': None, 'arguments': arguments(), 'nonce': 2})
+    apply(deployed_verifier)
+    verifier_address = deployed_verifier['deployments'][0]['contract']
+    digest = bytes.fromhex(vector['digest'][2:])
+    signature_args = [(5, digest), (7, bytes.fromhex(vector['signature'][2:])),
+                      (4, bytes(12) + bytes.fromhex(vector['address'][2:]))]
+    for valid in (True, False):
+        if not valid:
+            signature_args[0] = (5, bytes([digest[0] ^ 1]) + digest[1:])
+        result = invoke({**call, 'contract': verifier_address, 'function': 'verify',
+                         'arguments': arguments(*signature_args)})
+        if result.get('success') is not True or result['result'] != arguments((3, word(int(valid)))):
+            raise ValueError('packaged strict signature verification mismatch')
+
+    with tempfile.TemporaryDirectory(prefix='lithic-account-smoke-') as directory:
+        temporary = Path(directory)
+        code_file, request_file = temporary / 'code.bin', temporary / 'request.json'
+        code_file.write_bytes(bytecode)
+        request_file.write_bytes(canonical({'schemaVersion': 'lithovm-verification-v1',
+            'chainId': 700780, 'contractAddress': address, 'codeHash': artifact['codeHash'],
+            'artifact': artifact, 'sources': [{'path': ACCOUNT_SOURCE,
+                'content': source.decode(), 'keccak256': artifact['sourceHash']}]}))
+        checked = json.loads(run([str(verifier), str(request_file), '700780', address, str(code_file)], cwd=package))
+        if checked['rebuiltCodeHash'] != artifact['codeHash']:
+            raise ValueError('packaged v17 source rebuild mismatch')
+        code_file.write_bytes(bytecode[:-1] + bytes([bytecode[-1] ^ 1]))
+        bad = subprocess.run([str(verifier), str(request_file), '700780', address, str(code_file)], capture_output=True)
+        if bad.returncode == 0:
+            raise ValueError('packaged verifier accepted modified v17 code')
+    for command in ('prepare-deploy', 'prepare-call'):
+        incompatible = subprocess.run([str(dev), command, str(account_file), '--chain-id', '700777'], capture_output=True)
+        if incompatible.returncode == 0 or incompatible.stdout or b'Makalu v14 profile' not in incompatible.stderr:
+            raise ValueError('packaged lithdev accepted an incompatible v17 chain intent')
+    return {'bytecode_version': 17, 'code_bytes': len(bytecode), 'code_hash': artifact['codeHash'],
+            'source_hash': artifact['sourceHash'], 'initialization_vm_gas': int(deployed['gasUsed']),
+            'deployment_and_binary_record_reload': 'PASS', 'signer_map_reload': 'PASS',
+            'unauthorized_and_reinitialization_rejected': 'PASS', 'oog_and_recovery': 'PASS',
+            'corrupt_record_rejected': 'PASS', 'strict_signature_valid_and_invalid': 'PASS',
+            'source_verifier_and_tamper_control': 'PASS', 'incompatible_chain_intents_rejected': 'PASS',
+            'scope': 'local packaged smoke; proposed profile, not standards/chain/custody acceptance'}
 
 
 def build(args):
@@ -365,6 +552,7 @@ def build(args):
     if status and not args.allow_dirty:
         raise ValueError('source checkout is dirty; local candidates require --allow-dirty')
     source = source_snapshot(ROOT, allow_dirty=bool(status))
+    smoke_inputs = account_smoke_inputs(source)
     commit = run(['git', 'rev-parse', 'HEAD']).decode().strip()
     source_tree = run(['git', 'rev-parse', 'HEAD^{tree}']).decode().strip()
     epoch = int(run(['git', 'show', '-s', '--format=%ct', 'HEAD']).strip())
@@ -420,16 +608,21 @@ def build(args):
             if name.startswith('bin/'):
                 path.chmod(0o755)
         (package / 'release-smoke.lithic').write_bytes(SMOKE)
+        for name, raw in smoke_inputs.items():
+            path = package / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(raw)
         # A separate process releases the loaded DLL before Windows cleanup.
         smoke_result = json.loads(run([sys.executable, str(Path(__file__).resolve()),
-            'smoke', '--directory', str(package), '--target', args.target], cwd=package))
+            'smoke', '--directory', str(package), '--target', args.target,
+            '--profile', ACCOUNT_SMOKE_PROFILE], cwd=package))
     # Never substitute a snapshot if the user edited sources while builds ran.
     if source_snapshot(ROOT, allow_dirty=bool(status)) != source:
         raise ValueError('source changed during build; candidate not emitted')
     if run(['git', 'rev-parse', 'HEAD']).decode().strip() != commit:
         raise ValueError('source commit changed during build; candidate not emitted')
     source_manifest = {n: {'bytes': len(raw), 'sha256': sha(raw)} for n, raw in sorted(source.items())}
-    files = {**builds[0], 'release-smoke.lithic': SMOKE,
+    files = {**builds[0], **smoke_inputs, 'release-smoke.lithic': SMOKE,
              'include/lithovm.h': source['packages/vm/lithovm-ffi/include/lithovm.h'],
              'Cargo.lock': source['Cargo.lock'], 'source-manifest.json': canonical(source_manifest),
              'sbom.cdx.json': canonical(sbom(metadata, tomllib.loads(source['Cargo.lock'].decode()))),
@@ -441,6 +634,7 @@ def build(args):
                  'rustc': rustc, 'target': args.target, 'independent_builds': 2,
                  'windows_reproducible_link': args.target.endswith('windows-msvc'),
                  'native_library_link_args': native_library_link_args(args.target),
+                 'smoke_profile': ACCOUNT_SMOKE_PROFILE,
                  'binary_hashes_equal': True, 'binary_sha256': {n: sha(raw) for n, raw in builds[0].items()},
                  'reproducibility_scope': 'same toolchain/host dependencies; distinct source and build roots',
                  'signed': False, 'production_approved': False})}
@@ -448,7 +642,8 @@ def build(args):
         if name in source:
             files['docs/' + PurePosixPath(name).name] = source[name]
     files['manifest.json'] = canonical({'schema_version': 1, 'version': args.version,
-        'target': args.target, 'files': {n: {'bytes': len(raw), 'sha256': sha(raw)}
+        'target': args.target, 'smoke_profile': ACCOUNT_SMOKE_PROFILE,
+        'files': {n: {'bytes': len(raw), 'sha256': sha(raw)}
                                       for n, raw in sorted(files.items())}})
     raw = archive_bytes(files, epoch, windows='windows' in args.target)
     verify_archive(raw)
@@ -475,13 +670,14 @@ def main():
     command = sub.add_parser('smoke')
     command.add_argument('--directory', required=True)
     command.add_argument('--target', required=True)
+    command.add_argument('--profile', choices=(LEGACY_SMOKE_PROFILE, ACCOUNT_SMOKE_PROFILE))
     args = parser.parse_args()
     if args.command == 'build':
         build(args)
     elif args.command == 'verify':
         print(json.dumps(verify_archive(Path(args.archive).read_bytes()), indent=2))
     else:
-        print(json.dumps(smoke(Path(args.directory).resolve(), artifact_names(args.target))))
+        print(json.dumps(smoke(Path(args.directory).resolve(), artifact_names(args.target), args.profile)))
 
 
 if __name__ == '__main__':
