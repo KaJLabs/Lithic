@@ -110,7 +110,7 @@ contract NativeAccountCandidate {
         let encoded_tx: bytes = bytes_concat(bytes_concat(bytes_concat(bytes_concat(bytes_concat(bytes_concat(bytes_concat(bytes_concat(word_bytes(TX_TYPE), word_bytes(account)), word_bytes(chain.id)), word_bytes(nonce)), word_bytes(keccak256(hashes))), word_bytes(valid_after)), word_bytes(valid_until)), word_bytes(policy)), word_bytes(metadata));
         let prefix: bytes = bytes_slice(word_bytes(6401), 30, 2);
         let txid: bytes32 = keccak256(bytes_concat(bytes_concat(prefix, word_bytes(domain)), word_bytes(keccak256(encoded_tx))));
-    
+
         return txid;
     }
     pub fn propose(transaction: bytes) -> bytes32 {
@@ -158,7 +158,7 @@ contract NativeAccountCandidate {
         let encoded_tx: bytes = bytes_concat(bytes_concat(bytes_concat(bytes_concat(bytes_concat(bytes_concat(bytes_concat(bytes_concat(word_bytes(TX_TYPE), word_bytes(account)), word_bytes(chain.id)), word_bytes(nonce)), word_bytes(keccak256(hashes))), word_bytes(valid_after)), word_bytes(valid_until)), word_bytes(policy)), word_bytes(metadata));
         let prefix: bytes = bytes_slice(word_bytes(6401), 30, 2);
         let txid: bytes32 = keccak256(bytes_concat(bytes_concat(prefix, word_bytes(domain)), word_bytes(keccak256(encoded_tx))));
-    
+
         let current_policy: bytes32 = keccak256(bytes_concat(bytes_concat(word_bytes(POLICY_TAG), word_bytes(self.auth_epoch)), word_bytes(ZERO_HASH)));
         require(policy == current_policy);
         if valid_until == 0 { } else { require((valid_until < block.timestamp) == false); }
@@ -242,7 +242,7 @@ contract NativeAccountCandidate {
         let encoded_tx: bytes = bytes_concat(bytes_concat(bytes_concat(bytes_concat(bytes_concat(bytes_concat(bytes_concat(bytes_concat(word_bytes(TX_TYPE), word_bytes(account)), word_bytes(chain.id)), word_bytes(nonce)), word_bytes(keccak256(hashes))), word_bytes(valid_after)), word_bytes(valid_until)), word_bytes(policy)), word_bytes(metadata));
         let prefix: bytes = bytes_slice(word_bytes(6401), 30, 2);
         let txid: bytes32 = keccak256(bytes_concat(bytes_concat(prefix, word_bytes(domain)), word_bytes(keccak256(encoded_tx))));
-    
+
         let current_policy: bytes32 = keccak256(bytes_concat(bytes_concat(word_bytes(POLICY_TAG), word_bytes(self.auth_epoch)), word_bytes(ZERO_HASH)));
         require(policy == current_policy);
         if valid_until == 0 { } else { require((valid_until < block.timestamp) == false); }
@@ -308,13 +308,13 @@ contract NativeAccountCandidate {
             if size == 0 { transfer_native(target, amount); } else {
                 if target == contract.address {
                     require(amount == ZERO_AMOUNT);
-let selector: bytes32 = bytes_word(bytes_slice(data, 0, 32));if selector == ADMIN_SET_THRESHOLD { require(bytes_len(data) == 72); require(bytes_slice(data, 32, 8) == bytes_slice(word_bytes(5500655789569736961), 24, 8));let next: u64 = word_u64(bytes_word(bytes_slice(data, 40, 32))); 
+let selector: bytes32 = bytes_word(bytes_slice(data, 0, 32));if selector == ADMIN_SET_THRESHOLD { require(bytes_len(data) == 72); require(bytes_slice(data, 32, 8) == bytes_slice(word_bytes(5500655789569736961), 24, 8));let next: u64 = word_u64(bytes_word(bytes_slice(data, 40, 32)));
         require(0 < next); require(next < self.signer_count + 1);
         self.threshold = next; self.auth_epoch = self.auth_epoch + 1;
         emit ThresholdChanged { threshold: next };
-     } else { if selector == ADMIN_ADD_SIGNER { require(bytes_len(data) == 105); require(bytes_slice(data, 32, 8) == bytes_slice(word_bytes(5500655789569737220), 24, 8));require(bytes_get(data, 72) == 1);let signer: address = word_address(bytes_word(bytes_slice(data, 40, 32)));let scheme: u64 = word_u64(bytes_word(bytes_slice(data, 73, 32))); 
+     } else { if selector == ADMIN_ADD_SIGNER { require(bytes_len(data) == 105); require(bytes_slice(data, 32, 8) == bytes_slice(word_bytes(5500655789569737220), 24, 8));require(bytes_get(data, 72) == 1);let signer: address = word_address(bytes_word(bytes_slice(data, 40, 32)));let scheme: u64 = word_u64(bytes_word(bytes_slice(data, 73, 32)));
         require(self.signer_count < 16);
-    
+
     require((signer == ZERO_ADDRESS) == false);
     require(0 < scheme); require(scheme < 3);
     require(self.signer_ids[signer] == ZERO_HASH);
@@ -325,7 +325,7 @@ let selector: bytes32 = bytes_word(bytes_slice(data, 0, 32));if selector == ADMI
 
         self.signer_index[self.signer_count] = id; self.signer_count = self.signer_count + 1;
         self.auth_epoch = self.auth_epoch + 1; emit SignerAdded { signer: id };
-     } else { if selector == ADMIN_REMOVE_SIGNER { require(bytes_len(data) == 72); require(bytes_slice(data, 32, 8) == bytes_slice(word_bytes(5500655789569736965), 24, 8));let id: bytes32 = bytes_word(bytes_slice(data, 40, 32)); 
+     } else { if selector == ADMIN_REMOVE_SIGNER { require(bytes_len(data) == 72); require(bytes_slice(data, 32, 8) == bytes_slice(word_bytes(5500655789569736965), 24, 8));let id: bytes32 = bytes_word(bytes_slice(data, 40, 32));
         let signer: address = self.signers[id]; require((signer == ZERO_ADDRESS) == false);
         require(self.threshold < self.signer_count);
         let mut admin_index: u64 = 0; let mut found: bool = false;
@@ -336,7 +336,7 @@ let selector: bytes32 = bytes_word(bytes_slice(data, 0, 32));if selector == ADMI
         require(found); self.signer_count = self.signer_count - 1; self.signer_index[self.signer_count] = ZERO_HASH;
         self.signers[id] = ZERO_ADDRESS; self.signer_ids[signer] = ZERO_HASH; self.schemes[id] = 0;
         self.auth_epoch = self.auth_epoch + 1; emit SignerRemoved { signer: id };
-     } else { if selector == ADMIN_REPLACE_SIGNER { require(bytes_len(data) == 138); require(bytes_slice(data, 32, 8) == bytes_slice(word_bytes(5500655789569737477), 24, 8));require(bytes_get(data, 72) == 4);require(bytes_get(data, 105) == 1);let old_id: bytes32 = bytes_word(bytes_slice(data, 40, 32));let replacement: address = word_address(bytes_word(bytes_slice(data, 73, 32)));let scheme: u64 = word_u64(bytes_word(bytes_slice(data, 106, 32))); 
+     } else { if selector == ADMIN_REPLACE_SIGNER { require(bytes_len(data) == 138); require(bytes_slice(data, 32, 8) == bytes_slice(word_bytes(5500655789569737477), 24, 8));require(bytes_get(data, 72) == 4);require(bytes_get(data, 105) == 1);let old_id: bytes32 = bytes_word(bytes_slice(data, 40, 32));let replacement: address = word_address(bytes_word(bytes_slice(data, 73, 32)));let scheme: u64 = word_u64(bytes_word(bytes_slice(data, 106, 32)));
         let old: address = self.signers[old_id]; require((old == ZERO_ADDRESS) == false);
         require((replacement == ZERO_ADDRESS) == false); require(0 < scheme); require(scheme < 3);
         if replacement == old { } else { require(self.signer_ids[replacement] == ZERO_HASH); }
@@ -349,7 +349,7 @@ let selector: bytes32 = bytes_word(bytes_slice(data, 0, 32));if selector == ADMI
         self.signers[id] = replacement; self.signer_ids[replacement] = id; self.schemes[id] = scheme;
         self.auth_epoch = self.auth_epoch + 1;
         emit SignerRemoved { signer: old_id }; emit SignerAdded { signer: id };
-     } else { if selector == ADMIN_CANCEL { require(bytes_len(data) == 72); require(bytes_slice(data, 32, 8) == bytes_slice(word_bytes(5500655789569736965), 24, 8));let id: bytes32 = bytes_word(bytes_slice(data, 40, 32)); 
+     } else { if selector == ADMIN_CANCEL { require(bytes_len(data) == 72); require(bytes_slice(data, 32, 8) == bytes_slice(word_bytes(5500655789569736965), 24, 8));let id: bytes32 = bytes_word(bytes_slice(data, 40, 32));
         require(self.proposed[id]); require(self.executed[id] == false); require(self.cancelled[id] == false);
         self.cancelled[id] = true; emit Cancelled { txid: id };
      } else { revert(); } } } } }
@@ -359,14 +359,14 @@ let selector: bytes32 = bytes_word(bytes_slice(data, 0, 32));if selector == ADMI
         }
         emit Executed { txid: txid }; return true;
     }
-pub fn set_threshold(next: u64) -> bool { require(msg.sender == contract.address); 
+pub fn set_threshold(next: u64) -> bool { require(msg.sender == contract.address);
         require(0 < next); require(next < self.signer_count + 1);
         self.threshold = next; self.auth_epoch = self.auth_epoch + 1;
         emit ThresholdChanged { threshold: next };
      return true; }
-pub fn add_signer(signer: address, scheme: u64) -> bool { require(msg.sender == contract.address); 
+pub fn add_signer(signer: address, scheme: u64) -> bool { require(msg.sender == contract.address);
         require(self.signer_count < 16);
-    
+
     require((signer == ZERO_ADDRESS) == false);
     require(0 < scheme); require(scheme < 3);
     require(self.signer_ids[signer] == ZERO_HASH);
@@ -378,7 +378,7 @@ pub fn add_signer(signer: address, scheme: u64) -> bool { require(msg.sender == 
         self.signer_index[self.signer_count] = id; self.signer_count = self.signer_count + 1;
         self.auth_epoch = self.auth_epoch + 1; emit SignerAdded { signer: id };
      return true; }
-pub fn remove_signer(id: bytes32) -> bool { require(msg.sender == contract.address); 
+pub fn remove_signer(id: bytes32) -> bool { require(msg.sender == contract.address);
         let signer: address = self.signers[id]; require((signer == ZERO_ADDRESS) == false);
         require(self.threshold < self.signer_count);
         let mut admin_index: u64 = 0; let mut found: bool = false;
@@ -390,7 +390,7 @@ pub fn remove_signer(id: bytes32) -> bool { require(msg.sender == contract.addre
         self.signers[id] = ZERO_ADDRESS; self.signer_ids[signer] = ZERO_HASH; self.schemes[id] = 0;
         self.auth_epoch = self.auth_epoch + 1; emit SignerRemoved { signer: id };
      return true; }
-pub fn replace_signer(old_id: bytes32, replacement: address, scheme: u64) -> bool { require(msg.sender == contract.address); 
+pub fn replace_signer(old_id: bytes32, replacement: address, scheme: u64) -> bool { require(msg.sender == contract.address);
         let old: address = self.signers[old_id]; require((old == ZERO_ADDRESS) == false);
         require((replacement == ZERO_ADDRESS) == false); require(0 < scheme); require(scheme < 3);
         if replacement == old { } else { require(self.signer_ids[replacement] == ZERO_HASH); }
@@ -404,7 +404,7 @@ pub fn replace_signer(old_id: bytes32, replacement: address, scheme: u64) -> boo
         self.auth_epoch = self.auth_epoch + 1;
         emit SignerRemoved { signer: old_id }; emit SignerAdded { signer: id };
      return true; }
-pub fn cancel(id: bytes32) -> bool { require(msg.sender == contract.address); 
+pub fn cancel(id: bytes32) -> bool { require(msg.sender == contract.address);
         require(self.proposed[id]); require(self.executed[id] == false); require(self.cancelled[id] == false);
         self.cancelled[id] = true; emit Cancelled { txid: id };
      return true; }
