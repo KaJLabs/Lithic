@@ -6,6 +6,7 @@ use lithovm_bytecode::{function_selector, parse, values::Value, Program};
 use sha3::{Digest, Keccak256};
 use std::collections::BTreeMap;
 pub mod deployment_status;
+pub mod gateway_receipts;
 mod synchronous;
 
 pub type Address = [u8; 32];

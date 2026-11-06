@@ -33,6 +33,12 @@ adapter and evidence. The EVM target remains documented in
 
 ## Local development
 
+The separate [deployment integration candidate](NATIVE_DEPLOYMENT_INTEGRATION.md)
+adds strict offline EVM receipt decoding, transaction-wide native deployment IDs
+and source verification directly against independently read native KV records.
+Companion frontend/explorer adapters and synthetic compiler/FFI integration
+tests remain separate from live installation or finality acceptance.
+
 The separate [v16 account-primitives candidate](LITHOVM_DYNAMIC_VALUES_V1.md#account-primitives-and-proposed-base-account-candidate-v16)
 adds bounded byte manipulation, strict secp256k1 verification, authenticated
 contract identity and transitive read-only native calls. Its executable proposed

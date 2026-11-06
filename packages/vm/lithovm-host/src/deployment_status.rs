@@ -29,7 +29,26 @@ pub fn included(
     records: &[CommittedDeployment],
     inclusion: &Inclusion,
 ) -> Result<Vec<Value>, String> {
-    if records.len() > 64
+    included_bounded(records, inclusion, 64)
+}
+
+/// An EVM receipt can contain several successful gateway calls. Number their
+/// registrations once across the whole receipt; resetting at each log would
+/// give different creations the same deployment ID. This indexing bound does
+/// not change the host's 64-registration execution limit per native call.
+pub fn included_transaction(
+    records: &[CommittedDeployment],
+    inclusion: &Inclusion,
+) -> Result<Vec<Value>, String> {
+    included_bounded(records, inclusion, 4096)
+}
+
+fn included_bounded(
+    records: &[CommittedDeployment],
+    inclusion: &Inclusion,
+    limit: usize,
+) -> Result<Vec<Value>, String> {
+    if records.len() > limit
         || inclusion.chain_id == 0
         || inclusion.transaction_hash == [0; 32]
         || inclusion.block_hash == [0; 32]

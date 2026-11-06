@@ -408,6 +408,7 @@ dependencies = [
  "hex",
  "lithovm",
  "lithovm-bytecode",
+ "serde",
  "serde_json",
  "sha3",
 ]

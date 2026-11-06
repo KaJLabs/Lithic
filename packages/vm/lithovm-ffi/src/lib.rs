@@ -17,6 +17,26 @@ use std::{
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 const MAX_WRITES: usize = 128;
 mod record;
+
+/// Read-only source-verification seam. The chain adapter supplies these bytes
+/// independently from the source submission at a pinned canonical block.
+/// This checks record/hash/bytecode/storage integrity, not consensus inclusion.
+pub fn inspected_contract_bytecode(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    let record = record::decode_record(bytes)?;
+    if record.bytecode.len() > MAX_CHILD_CODE_BYTES {
+        return Err("code exceeds harness limit".into());
+    }
+    if code_hash(&record.bytecode) != record.code_hash {
+        return Err("stored code hash mismatch".into());
+    }
+    let program = parse(&record.bytecode).map_err(|e| e.to_string())?;
+    let storage =
+        Storage::from_persisted_bytes(&record.storage, &program).map_err(|e| e.to_string())?;
+    if !storage.staged_map_entries().is_empty() {
+        return Err("contract record contains inline map entries".into());
+    }
+    Ok(record.bytecode)
+}
 type ReadFn = unsafe extern "C" fn(usize, *const u8, usize, *mut u8, usize) -> isize;
 type ChargeFn = unsafe extern "C" fn(usize, u64) -> i32;
 #[repr(C)]

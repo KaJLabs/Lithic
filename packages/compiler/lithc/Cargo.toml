@@ -15,6 +15,8 @@ lithic-evm = { path = "../lithic-evm" }
 lithic-lithovm = { path = "../lithic-lithovm" }
 lithic-syntax = { path = "../lithic-syntax" }
 lithovm-bytecode = { path = "../../vm/bytecode" }
+lithovm-host = { path = "../../vm/lithovm-host" }
+lithovm-ffi = { path = "../../vm/lithovm-ffi" }
 hex = "0.4"
 sha3 = "0.10"
 serde = { version = "1", features = ["derive"] }

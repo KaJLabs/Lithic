@@ -17,16 +17,25 @@ fn bounded_read(path: &str) -> Result<Vec<u8>, String> {
 }
 
 fn run() -> Result<(), String> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let native_record = args.first().is_some_and(|arg| arg == "--native-record");
+    if native_record {
+        args.remove(0);
+    }
     if args.len() != 4 {
         return Err(
-            "usage: lithverify REQUEST.json CHAIN_ID CONTRACT_ADDRESS CHAIN_CODE.bin".into(),
+            "usage: lithverify [--native-record] REQUEST.json CHAIN_ID CONTRACT_ADDRESS CHAIN_CODE_OR_RECORD.bin".into(),
         );
     }
     let request: Request =
         serde_json::from_slice(&bounded_read(&args[0])?).map_err(|e| e.to_string())?;
     let chain_id = args[1].parse::<u64>().map_err(|e| e.to_string())?;
     let bytes = bounded_read(&args[3])?;
+    let bytes = if native_record {
+        lithovm_ffi::inspected_contract_bytecode(&bytes)?
+    } else {
+        bytes
+    };
     let verified = verify(
         &request,
         ChainCode {

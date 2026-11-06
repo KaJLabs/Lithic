@@ -75,3 +75,10 @@ path = "fuzz_targets/ffi_records.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "gateway_receipts"
+path = "fuzz_targets/gateway_receipts.rs"
+test = false
+doc = false
+bench = false

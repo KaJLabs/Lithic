@@ -137,6 +137,10 @@ mod tests {
                 );
             }
             let decoded = decode_record(&encoded).unwrap();
+            assert_eq!(
+                inspected_contract_bytecode(&encoded).unwrap(),
+                contract.bytecode
+            );
             assert_eq!(decoded.bytecode, contract.bytecode);
             assert_eq!(decoded.code_hash, contract.code_hash);
             assert_eq!(
@@ -212,6 +216,10 @@ mod tests {
         let contract = contract(true);
         let mut encoded = encode_record(&contract).unwrap();
         encoded[BINARY_MAGIC.len() + 4 + contract.bytecode.len()] ^= 1;
+        assert_eq!(
+            inspected_contract_bytecode(&encoded).unwrap_err(),
+            "stored code hash mismatch"
+        );
         let mut state = super::super::tests::state();
         let mut tx = state.begin_transaction().unwrap();
         tx.writes.insert(key(&[1; 32]), encoded);

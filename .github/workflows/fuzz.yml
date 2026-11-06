@@ -26,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [bytecode_decode, compiler_runtime, stateful_maps, synchronous_calls, child_creation, binary_values, account_authorization, ffi_records]
+        target: [bytecode_decode, compiler_runtime, stateful_maps, synchronous_calls, child_creation, binary_values, account_authorization, ffi_records, gateway_receipts]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - run: rustup toolchain install nightly --profile minimal

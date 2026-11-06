@@ -12,6 +12,7 @@ USAGE:
   lithdev prepare-deploy FILE.lithic --chain-id 700777 [--initializer NAME --args ARGS.json]
   lithdev prepare-call FILE.lithic --chain-id 700777 --contract ADDRESS --function NAME [--args ARGS.json]
   lithdev decode-result 0xEVM_RETURN_BYTES
+  lithdev decode-receipt RECEIPT.json --chain-id ID --gateway ADDRESS
 
 ARGS.json is an array of {\"type\":\"u256\",\"value\":\"42\"} objects.
 Supported types: u64/u256 (decimal strings), bool, address, bytes32, string.
@@ -335,13 +336,17 @@ fn run(args: &[String]) -> Result<Json, String> {
         }
         return decode_result(&args[1]);
     }
-    if !matches!(command.as_str(), "prepare-deploy" | "prepare-call") || args.len() < 4 {
+    if !matches!(
+        command.as_str(),
+        "prepare-deploy" | "prepare-call" | "decode-receipt"
+    ) || args.len() < 4
+    {
         return Err("invalid command; use --help".into());
     }
-    let allowed = if command == "prepare-deploy" {
-        vec!["--chain-id", "--initializer", "--args"]
-    } else {
-        vec!["--chain-id", "--contract", "--function", "--args"]
+    let allowed = match command.as_str() {
+        "prepare-deploy" => vec!["--chain-id", "--initializer", "--args"],
+        "prepare-call" => vec!["--chain-id", "--contract", "--function", "--args"],
+        _ => vec!["--chain-id", "--gateway"],
     };
     let mut flags = BTreeMap::new();
     let mut items = args[2..].chunks_exact(2);
@@ -354,6 +359,19 @@ fn run(args: &[String]) -> Result<Json, String> {
     }
     if !items.remainder().is_empty() {
         return Err("option value required".into());
+    }
+    if command == "decode-receipt" {
+        let chain = flags.get("--chain-id").ok_or("--chain-id required")?;
+        let chain_id = chain.parse::<u64>().map_err(|_| "invalid chain id")?;
+        if chain_id == 0 || chain_id.to_string() != *chain {
+            return Err("noncanonical chain id".into());
+        }
+        let receipt = serde_json::from_str(&read_file(&args[1])?).map_err(|e| e.to_string())?;
+        return lithovm_host::gateway_receipts::decode(
+            &receipt,
+            chain_id,
+            flags.get("--gateway").ok_or("--gateway required")?,
+        );
     }
     prepare(command, &read_file(&args[1])?, &flags)
 }
