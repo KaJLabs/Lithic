@@ -12,7 +12,7 @@ full language/standards conformance.
 | Tool | Current implementation |
 |---|---|
 | lithc | Parses/checks declarations and emits ABI plus executable EVM or versioned native LithoVM bytecode for the documented subset. Native artifacts through the separate v17 candidate include compiler/target versions, exact source/code hashes and canonical full-hash entrypoint selectors. Unsupported semantics fail the complete build. |
-| lithovm-host | Transactional chain-state seam plus in-memory conformance adapter. Produces structured failure/gas outcomes, atomically executes call trees, and rejects reentrancy. Deployment v1 derives selectors from validated bytecode and adds code hashes, deterministic addresses, value transfer and optional initializer execution in one transaction. No Lithosphere persistence/RPC adapter is included. |
+| lithovm-host | Transactional chain-state seam plus in-memory conformance adapter. Produces structured failure/gas outcomes, atomically executes call trees, and rejects reentrancy. Deployment v1 derives selectors from validated bytecode and adds code hashes, deterministic addresses, value transfer and initializer execution in one transaction. Separate FFI/Go persistence and bank-custody candidates require their matching chain profile; they do not establish production RPC/activation acceptance. |
 | lithfmt | Parse-checked, literal-preserving whitespace normalization; supports --check. |
 | lithlint | Declaration-level naming and AI-budget rules; supports --deny-warnings. Not a security analyzer. |
 | lithdev | Native source compilation, unsigned Makalu gateway deployment/call intent preparation, and strict ABI/LVAL result decoding. No wallet, signing, RPC or broadcast execution. See [usage](LITHDEV_NATIVE_PREPARATION.md). |
@@ -32,6 +32,12 @@ adapter and evidence. The EVM target remains documented in
 [EVM backend v1](EVM_BACKEND_V1.md).
 
 ## Local development
+
+The separate [bank-backed native custody candidate](NATIVE_CUSTODY_CANDIDATE.md)
+adds an opt-in v3 FFI and EVM-journal settlement against the actual SDK bank
+ledger. Its default build preserves the existing nonpayable profile. Local
+compiler/FFI, rollback and real-keeper supply tests are not live custody or
+production acceptance; signing, security, policy and network gates remain.
 
 The separate [deployment integration candidate](NATIVE_DEPLOYMENT_INTEGRATION.md)
 adds strict offline EVM receipt decoding, transaction-wide native deployment IDs

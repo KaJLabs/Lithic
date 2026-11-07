@@ -39,7 +39,7 @@ The packaged `lithdev` prepares native deployment/call intents from the same
 source and artifact; see [its usage and boundaries](LITHDEV_NATIVE_PREPARATION.md).
 This smoke never registers a chain service, signs a transaction or uses LAX.
 
-New development packages declare smoke profile `native-account-v17-v1`.
+New development packages declare smoke profile `native-account-v17-bank-candidate-v1`.
 In addition to the legacy check, the packaged compiler compiles the proposed
 native account and the packaged FFI initializes it, reloads its binary record
 and signer map, rejects unauthorized/repeated initialization, checks OOG and
@@ -49,6 +49,14 @@ includes only the public digest/signature/address, bound to the unchanged
 proposed vector-file hash; no private-key fields are copied. The source worker
 rebuilds the actual v17 account and rejects modified code, while `lithdev`
 rejects preparing that account for the documented Makalu v14 profile.
+
+The new profile also compiles a custody fixture and exercises the packaged FFI
+v3: preserve prefunding, reject unauthorized/reverting/insufficient/OOG calls
+without effects, and return a supply-conserving bank settlement without applying
+external balances. This is a separately disabled
+[custody candidate](NATIVE_CUSTODY_CANDIDATE.md), not approval to replace the
+first nonpayable chain profile. Historical `native-account-v17-v1` archives keep
+their explicit v2-only smoke behavior.
 
 The manifest records the smoke profile and requires its fixtures. Historical
 archives without this field retain their legacy validation rules. Running

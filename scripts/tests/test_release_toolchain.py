@@ -95,9 +95,11 @@ class ReleaseTests(unittest.TestCase):
             'include/lithovm.h', 'sbom.cdx.json', 'Cargo.lock', 'source-manifest.json',
             'build-evidence.json', 'smoke-evidence.json'}
         files = {n: n.encode() for n in names}
-        if profile == release.ACCOUNT_SMOKE_PROFILE:
+        if profile in (release.ACCOUNT_SMOKE_PROFILE, release.CUSTODY_SMOKE_PROFILE):
             for name in (release.ACCOUNT_SOURCE, release.SIGNATURE_SOURCE, release.SIGNATURE_VECTOR):
                 files[name] = name.encode()
+            if profile == release.CUSTODY_SMOKE_PROFILE:
+                files[release.CUSTODY_SOURCE] = release.CUSTODY_SMOKE
         files['manifest.json'] = release.canonical({'schema_version': 1, 'version': 'lithic-vtest',
             'target': target, 'smoke_profile': profile,
             'files': {n: {'sha256': release.sha(raw), 'bytes': len(raw)}
@@ -113,6 +115,15 @@ class ReleaseTests(unittest.TestCase):
             files['manifest.json'] = release.canonical(manifest)
             with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'required'):
                 release.verify_archive(release.archive_bytes(files, 1700000000))
+
+    def test_custody_profile_requires_its_actual_smoke_source(self):
+        files = self.files('x86_64-unknown-linux-gnu', release.CUSTODY_SMOKE_PROFILE)
+        del files[release.CUSTODY_SOURCE]
+        manifest = json.loads(files['manifest.json'])
+        del manifest['files'][release.CUSTODY_SOURCE]
+        files['manifest.json'] = release.canonical(manifest)
+        with self.assertRaisesRegex(ValueError, 'required'):
+            release.verify_archive(release.archive_bytes(files, 1700000000))
 
     def test_smoke_profiles_are_explicit_and_old_archives_still_verify(self):
         files = self.files('x86_64-unknown-linux-gnu')
@@ -147,7 +158,7 @@ class ReleaseTests(unittest.TestCase):
 
     def test_archive_deterministic_and_complete_for_all_release_targets(self):
         for target in ('x86_64-unknown-linux-gnu', 'aarch64-apple-darwin', 'x86_64-pc-windows-msvc'):
-            for profile in (release.LEGACY_SMOKE_PROFILE, release.ACCOUNT_SMOKE_PROFILE):
+            for profile in (release.LEGACY_SMOKE_PROFILE, release.ACCOUNT_SMOKE_PROFILE, release.CUSTODY_SMOKE_PROFILE):
                 with self.subTest(target=target, profile=profile):
                     files = self.files(target, profile)
                     first = release.archive_bytes(files, 1700000000, windows='windows' in target)

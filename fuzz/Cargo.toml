@@ -82,3 +82,10 @@ path = "fuzz_targets/gateway_receipts.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "native_custody"
+path = "fuzz_targets/native_custody.rs"
+test = false
+doc = false
+bench = false

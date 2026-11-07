@@ -28,6 +28,17 @@ SMOKE = b'''contract ReleaseSmoke {
 '''
 LEGACY_SMOKE_PROFILE = 'native-v11-v1'
 ACCOUNT_SMOKE_PROFILE = 'native-account-v17-v1'
+CUSTODY_SMOKE_PROFILE = 'native-account-v17-bank-candidate-v1'
+CUSTODY_SOURCE = 'smoke/native-custody.lithic'
+CUSTODY_SMOKE = b'''contract BankSmoke {
+    state { owner: address; sent: u256; }
+    pub fn initialize(owner: address) -> bool { self.owner = owner; return true; }
+    pub fn pay(to: address, amount: u256, accept: bool) -> bool {
+        require(msg.sender == self.owner); transfer_native(to, amount);
+        self.sent = self.sent + amount; require(accept); return true;
+    }
+}
+'''
 ACCOUNT_SOURCE = 'sdk/contracts/standards/lep10015_native_account_candidate.lithic'
 SIGNATURE_SOURCE = 'smoke/signature.lithic'
 SIGNATURE_VECTOR = 'smoke/signature-vector.json'
@@ -43,7 +54,8 @@ SIGNATURE_SMOKE = b'''contract ReleaseSignatureSmoke {
 DOCS = ('README.md', 'LICENSE', 'docs/IMPLEMENTATION_STATUS.md',
         'docs/RELEASE_PROCESS.md', 'docs/LEP100_15_IMPLEMENTATION_DECISIONS.md',
         'docs/LTH_R3_RATIFICATION_2026_10_01.md', 'docs/PRODUCTION_COMPLETION_2026_10_25.md',
-        'docs/LITHDEV_NATIVE_PREPARATION.md', 'docs/LITHOVM_DYNAMIC_VALUES_V1.md')
+        'docs/LITHDEV_NATIVE_PREPARATION.md', 'docs/LITHOVM_DYNAMIC_VALUES_V1.md',
+        'docs/NATIVE_CUSTODY_CANDIDATE.md')
 
 
 def sha(raw):
@@ -62,6 +74,7 @@ def account_smoke_inputs(source):
     signature = vector['signatures'][0]
     # Public test material only. Do not ship the fixture's private-key fields.
     return {ACCOUNT_SOURCE: source[ACCOUNT_SOURCE], SIGNATURE_SOURCE: SIGNATURE_SMOKE,
+            CUSTODY_SOURCE: CUSTODY_SMOKE,
             SIGNATURE_VECTOR: canonical({'source_vectors_sha256': VECTORS_SHA256,
                 'digest': vector['digest'], 'signature': signature['signature'],
                 'address': signature['address']})}
@@ -267,8 +280,10 @@ def verify_archive(raw):
         'include/lithovm.h', 'sbom.cdx.json', 'Cargo.lock', 'source-manifest.json',
         'build-evidence.json', 'smoke-evidence.json'}
     profile = manifest.get('smoke_profile', LEGACY_SMOKE_PROFILE)
-    if profile == ACCOUNT_SMOKE_PROFILE:
+    if profile in (ACCOUNT_SMOKE_PROFILE, CUSTODY_SMOKE_PROFILE):
         required.update((ACCOUNT_SOURCE, SIGNATURE_SOURCE, SIGNATURE_VECTOR))
+        if profile == CUSTODY_SMOKE_PROFILE:
+            required.add(CUSTODY_SOURCE)
     elif profile != LEGACY_SMOKE_PROFILE:
         raise ValueError('unsupported release smoke profile')
     if not required <= set(files):
@@ -283,7 +298,7 @@ def smoke(package_dir, names, profile=None):
     if declared is not None and profile is not None and declared != profile:
         raise ValueError('requested smoke profile contradicts the package')
     profile = profile or declared or LEGACY_SMOKE_PROFILE
-    if profile not in (LEGACY_SMOKE_PROFILE, ACCOUNT_SMOKE_PROFILE):
+    if profile not in (LEGACY_SMOKE_PROFILE, ACCOUNT_SMOKE_PROFILE, CUSTODY_SMOKE_PROFILE):
         raise ValueError('unsupported release smoke profile')
     compiler = package_dir / names['lithc.exe' if os.name == 'nt' else 'lithc']
     source = package_dir / 'release-smoke.lithic'
@@ -394,10 +409,89 @@ def smoke(package_dir, names, profile=None):
             'source_verifier': 'PASS', 'modified_code_rejected': 'PASS',
             'source_hash': artifact['sourceHash'], 'code_hash': verified['rebuiltCodeHash'],
             'scope': 'local packaged native library; no chain registration or deployment'}
-    if profile == ACCOUNT_SMOKE_PROFILE:
+    if profile in (ACCOUNT_SMOKE_PROFILE, CUSTODY_SMOKE_PROFILE):
         evidence['native_account_v17'] = account_smoke(package_dir, compiler, verifier,
                                                      dev, invoke, state, charges)
+    if profile == CUSTODY_SMOKE_PROFILE:
+        evidence['native_custody_candidate'] = custody_smoke(
+            package_dir, compiler, library, Buffer, read_type, charge_type, read, charge, state)
     return evidence
+
+
+def custody_smoke(package, compiler, library, buffer_type, read_type, charge_type, read, charge, state):
+    """Exercise the actual packaged v3 library; v1/v2 smoke stays unchanged."""
+    bank, callback_errors = {}, []
+    balance_type = ctypes.CFUNCTYPE(ctypes.c_int32, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_void_p)
+    @balance_type
+    def balance(_, address, output):
+        try:
+            value = bank.get('0x' + ctypes.string_at(address, 20).hex(), 0)
+            ctypes.memmove(output, value.to_bytes(32, 'big'), 32)
+            return 1
+        except Exception:
+            callback_errors.append('balance callback failed')
+            return 0
+    execute = library.lithovm_execute_v3
+    execute.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, read_type,
+                       balance_type, charge_type, ctypes.POINTER(buffer_type)]
+    execute.restype = ctypes.c_int32
+    def invoke(value):
+        raw = canonical(value)
+        output = buffer_type()
+        status = execute(raw, len(raw), 0, read, balance, charge, ctypes.byref(output))
+        try:
+            if status or callback_errors or not output.data or output.len > 2 * 1024 * 1024:
+                raise ValueError('packaged custody ABI failed')
+            result = json.loads(ctypes.string_at(output.data, output.len))
+            if result.get('bankVersion') != 1 or not isinstance(result.get('balances'), list):
+                raise ValueError('packaged custody response schema mismatch')
+            return result
+        finally:
+            library.lithovm_free_v1(output)
+    def arguments(*items):
+        return '0x' + (b'LVAL\x01' + len(items).to_bytes(2, 'big') +
+            b''.join(bytes([tag]) + value.to_bytes(32, 'big') for tag, value in items)).hex()
+    artifact = json.loads(run([str(compiler), '--emit', 'lithovm', str(package / CUSTODY_SOURCE)], cwd=package))
+    owner, recipient = '0x' + '11' * 20, '0x' + '22' * 20
+    request = {'version': 2, 'operation': 'deploy', 'caller': owner, 'bytecode': artifact['bytecode'],
+        'function': 'initialize', 'arguments': arguments((4, int(owner, 16))), 'nonce': 3,
+        'gas_limit': 10_000_000, 'chain_id': 700780, 'block_height': 1, 'block_timestamp': 1}
+    preview = invoke(request)
+    if not preview['success']:
+        raise ValueError('packaged custody prediction failed')
+    address = preview['deployments'][0]['contract']
+    bank[address] = 100
+    deployed = invoke(request)
+    if not deployed['success'] or deployed['balances'] or bank[address] != 100:
+        raise ValueError('packaged custody lost prefunding')
+    for update in deployed['writes']:
+        state[update['key']] = bytes.fromhex(update['value'][2:])
+    call = {k: v for k, v in request.items() if k != 'bytecode'}
+    call.update(operation='call', contract=address, function='pay')
+    for fault in ('revert', 'unauthorized', 'insufficient', 'oog'):
+        rejected = invoke({**call,
+            'caller': recipient if fault == 'unauthorized' else owner,
+            'gas_limit': 1 if fault == 'oog' else 10_000_000,
+            'arguments': arguments((4, int(recipient, 16)), (2, 101 if fault == 'insufficient' else 7),
+                                   (3, int(fault != 'revert')))})
+        if rejected['success'] or any(rejected[n] for n in ('writes', 'events', 'deployments', 'balances')):
+            raise ValueError('packaged custody failure leaked effects: ' + fault)
+    result = invoke({**call, 'arguments': arguments((4, int(recipient, 16)), (2, 7), (3, 1))})
+    if not result['success'] or len(result['balances']) != 2 or bank != {address: 100}:
+        raise ValueError('packaged custody applied external balances or omitted settlement')
+    changes = result['balances']
+    if sum(int(c['before'], 16) for c in changes) != sum(int(c['after'], 16) for c in changes):
+        raise ValueError('packaged custody did not conserve supply')
+    for c in changes:
+        if bank.get(c['address'], 0) != int(c['before'], 16):
+            raise ValueError('packaged custody original balance mismatch')
+    for c in changes:
+        bank[c['address']] = int(c['after'], 16)
+    if bank != {address: 93, recipient: 7}:
+        raise ValueError('packaged custody settlement mismatch')
+    return {'ffi_v3': 'PASS', 'prefunding': 'PASS', 'balanced_staged_settlement': 'PASS',
+        'revert_unauthorized_insufficient_oog_no_effects': 'PASS',
+        'scope': 'local packaged-library candidate only; no external bank, chain or custody approval'}
 
 
 def account_smoke(package, compiler, verifier, dev, invoke, state, charges):
@@ -615,7 +709,7 @@ def build(args):
         # A separate process releases the loaded DLL before Windows cleanup.
         smoke_result = json.loads(run([sys.executable, str(Path(__file__).resolve()),
             'smoke', '--directory', str(package), '--target', args.target,
-            '--profile', ACCOUNT_SMOKE_PROFILE], cwd=package))
+            '--profile', CUSTODY_SMOKE_PROFILE], cwd=package))
     # Never substitute a snapshot if the user edited sources while builds ran.
     if source_snapshot(ROOT, allow_dirty=bool(status)) != source:
         raise ValueError('source changed during build; candidate not emitted')
@@ -634,7 +728,7 @@ def build(args):
                  'rustc': rustc, 'target': args.target, 'independent_builds': 2,
                  'windows_reproducible_link': args.target.endswith('windows-msvc'),
                  'native_library_link_args': native_library_link_args(args.target),
-                 'smoke_profile': ACCOUNT_SMOKE_PROFILE,
+                 'smoke_profile': CUSTODY_SMOKE_PROFILE,
                  'binary_hashes_equal': True, 'binary_sha256': {n: sha(raw) for n, raw in builds[0].items()},
                  'reproducibility_scope': 'same toolchain/host dependencies; distinct source and build roots',
                  'signed': False, 'production_approved': False})}
@@ -642,7 +736,7 @@ def build(args):
         if name in source:
             files['docs/' + PurePosixPath(name).name] = source[name]
     files['manifest.json'] = canonical({'schema_version': 1, 'version': args.version,
-        'target': args.target, 'smoke_profile': ACCOUNT_SMOKE_PROFILE,
+        'target': args.target, 'smoke_profile': CUSTODY_SMOKE_PROFILE,
         'files': {n: {'bytes': len(raw), 'sha256': sha(raw)}
                                       for n, raw in sorted(files.items())}})
     raw = archive_bytes(files, epoch, windows='windows' in args.target)
@@ -670,7 +764,7 @@ def main():
     command = sub.add_parser('smoke')
     command.add_argument('--directory', required=True)
     command.add_argument('--target', required=True)
-    command.add_argument('--profile', choices=(LEGACY_SMOKE_PROFILE, ACCOUNT_SMOKE_PROFILE))
+    command.add_argument('--profile', choices=(LEGACY_SMOKE_PROFILE, ACCOUNT_SMOKE_PROFILE, CUSTODY_SMOKE_PROFILE))
     args = parser.parse_args()
     if args.command == 'build':
         build(args)

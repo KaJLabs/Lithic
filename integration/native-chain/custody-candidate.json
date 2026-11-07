@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "status": "disabled-candidate",
+  "defaultProfile": "nonpayable-v1-v2-unchanged",
+  "buildTags": [
+    "lithovm_chain_lab",
+    "lithovm_bank_candidate"
+  ],
+  "ffiSymbol": "lithovm_execute_v3",
+  "ffiRequestVersion": 2,
+  "chainBaseCommit": "3cadea9d252be3a4aec63f5e1ba200560eb14007",
+  "chainCandidateCommit": "315ab5da4a06ad6e8db2e06910ddc0449f3d4940",
+  "chainPatchSha256": "6327f0aba4ba8bcca550cb7666079ec4f7d3809bb1418518de7da22693cd4789",
+  "sdkBaseCommit": "f2e6295b662fdb27ea33da1296c29588ccdaab42",
+  "sdkCompatibility": "unchanged six compatibility files from frozen v17 review source",
+  "nativeGasCap": 10000000,
+  "maximumDistinctBankAccounts": 128,
+  "productionApproved": false
+}

@@ -61,7 +61,7 @@ func (p LabPrecompile) Run(evm *vm.EVM, frame *vm.Contract, readOnly bool) ([]by
 		Height:    evm.Context.BlockNumber.Uint64(),
 		Timestamp: evm.Context.Time.Uint64(),
 	}
-	response, err := ExecuteFrame(db, p.Key, frame, readOnly, env, request)
+	response, err := executeSelectedProfile(db, p.Key, frame, readOnly, env, request)
 	if err != nil {
 		return nil, err
 	}

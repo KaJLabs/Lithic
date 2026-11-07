@@ -63,9 +63,14 @@ type Response struct {
 type Reader func(string) ([]byte, error)
 type Charger func(uint64) error
 
+// BalanceReader returns a uint256 word from the embedding bank/EVM ledger.
+// It is never accepted from caller JSON. Only the opt-in custody ABI uses it.
+type BalanceReader func([20]byte) ([32]byte, error)
+
 type callbacks struct {
-	read   Reader
-	charge Charger
+	read    Reader
+	charge  Charger
+	balance BalanceReader
 }
 
 func validStateKey(key string) bool {
@@ -190,6 +195,10 @@ func execute(request Request, read Reader, charge Charger) (Response, error) {
 	if err := json.Unmarshal(C.GoBytes(unsafe.Pointer(output.data), C.int(output.len)), &response); err != nil {
 		return response, err
 	}
+	return validateResponse(response, request)
+}
+
+func validateResponse(response Response, request Request) (Response, error) {
 	gas, err := strconv.ParseUint(response.GasUsed, 10, 64)
 	if err != nil || gas > request.GasLimit {
 		return Response{}, errors.New("invalid native gas")

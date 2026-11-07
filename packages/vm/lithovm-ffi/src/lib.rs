@@ -16,6 +16,7 @@ use std::{
 
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 const MAX_WRITES: usize = 128;
+mod custody;
 mod record;
 
 /// Read-only source-verification seam. The chain adapter supplies these bytes
@@ -145,11 +146,13 @@ struct CallbackState {
     committed: BTreeMap<String, Vec<u8>>,
     read_bytes: Rc<Cell<usize>>,
     read_count: Rc<Cell<usize>>,
+    bank: Option<Rc<custody::Bank>>,
 }
 struct Transaction<'a> {
     parent: &'a mut CallbackState,
     writes: BTreeMap<String, Vec<u8>>,
     map_writes: Rc<RefCell<BTreeMap<String, Vec<u8>>>>,
+    balances: BTreeMap<Address, [u8; 32]>,
 }
 impl TransactionalState for CallbackState {
     type Transaction<'a> = Transaction<'a>;
@@ -158,6 +161,7 @@ impl TransactionalState for CallbackState {
             parent: self,
             writes: BTreeMap::new(),
             map_writes: Rc::new(RefCell::new(BTreeMap::new())),
+            balances: BTreeMap::new(),
         })
     }
 }
@@ -318,16 +322,34 @@ impl StateTransaction for Transaction<'_> {
         self.map_writes.borrow_mut().extend(map_updates);
         Ok(())
     }
-    fn load_balance(&self, _: &Address) -> Result<[u8; 32], String> {
-        Ok([0; 32])
+    fn load_balance(&self, address: &Address) -> Result<[u8; 32], String> {
+        if let Some(balance) = self.balances.get(address) {
+            return Ok(*balance);
+        }
+        match &self.parent.bank {
+            Some(bank) => bank.balance(address),
+            None => Ok([0; 32]),
+        }
     }
-    fn store_balance(&mut self, _: Address, balance: [u8; 32]) -> Result<(), String> {
+    fn store_balance(&mut self, address: Address, balance: [u8; 32]) -> Result<(), String> {
+        if let Some(bank) = &self.parent.bank {
+            bank.balance(&address)?;
+            if !self.balances.contains_key(&address) && self.balances.len() >= custody::MAX_BALANCES
+            {
+                return Err("bank footprint exceeds limit".into());
+            }
+            self.balances.insert(address, balance);
+            return Ok(());
+        }
         if balance != [0; 32] {
             return Err("payable operations disabled in chain harness".into());
         }
         Ok(())
     }
     fn commit(self) -> Result<(), String> {
+        if let Some(bank) = &self.parent.bank {
+            bank.commit(&self.balances)?;
+        }
         self.parent.committed = self.writes;
         Ok(())
     }
@@ -346,8 +368,20 @@ fn rejected(kind: HostFailureKind, message: String, contract: Address) -> Result
     .map_err(|e| e.to_string())
 }
 fn execute(input: &[u8], read: ReadFn, context: usize) -> Result<Vec<u8>, String> {
+    execute_profile(input, read, context, None)
+}
+
+fn execute_profile(
+    input: &[u8],
+    read: ReadFn,
+    context: usize,
+    bank: Option<Rc<custody::Bank>>,
+) -> Result<Vec<u8>, String> {
     let request: Request = serde_json::from_slice(input).map_err(|e| e.to_string())?;
-    if request.version != 1 || request.chain_id == 0 || request.gas_limit > 10_000_000 {
+    if request.version != if bank.is_some() { 2 } else { 1 }
+        || request.chain_id == 0
+        || request.gas_limit > 10_000_000
+    {
         return Err("unsupported request version/context/limit".into());
     }
     let caller = address(&request.caller)?;
@@ -358,6 +392,7 @@ fn execute(input: &[u8], read: ReadFn, context: usize) -> Result<Vec<u8>, String
         committed: BTreeMap::new(),
         read_bytes: Rc::new(Cell::new(0)),
         read_count: Rc::new(Cell::new(0)),
+        bank,
     });
     let (result, gas, deployments, events) = match request.operation.as_str() {
         "deploy" => {
@@ -545,6 +580,84 @@ pub unsafe extern "C" fn lithovm_execute_v2(
     execute_abi(input, len, context, read, charge, output)
 }
 
+/// Disabled custody extension. Request version 2, explicit bank reader and live
+/// fuel are mandatory. Success returns conservative, sorted before/after bank
+/// changes; the embedding EVM validates/applies them under its own journal.
+/// This function never writes bank state, mints assets or accepts a balance from
+/// caller JSON. Top-level gateway calls remain nonpayable.
+///
+/// # Safety
+/// All buffers/callbacks must be valid for this synchronous call. Balance callback
+/// pointers address exactly 20 input bytes and 32 output bytes; retain neither.
+#[no_mangle]
+pub unsafe extern "C" fn lithovm_execute_v3(
+    input: *const u8,
+    len: usize,
+    context: usize,
+    read: Option<ReadFn>,
+    balance: Option<custody::ReadBalance>,
+    charge: Option<ChargeFn>,
+    output: *mut Buffer,
+) -> i32 {
+    if output.is_null() {
+        return 1;
+    }
+    unsafe {
+        *output = Buffer {
+            data: std::ptr::null_mut(),
+            len: 0,
+        };
+    }
+    if input.is_null()
+        || len == 0
+        || len > MAX_BYTES
+        || read.is_none()
+        || balance.is_none()
+        || charge.is_none()
+    {
+        return 1;
+    }
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        let bank = Rc::new(custody::Bank::new(balance.unwrap(), context));
+        let run = || {
+            execute_profile(
+                unsafe { std::slice::from_raw_parts(input, len) },
+                read.unwrap(),
+                context,
+                Some(bank.clone()),
+            )
+        };
+        let raw = unsafe { lithovm::with_external_fuel(context, charge.unwrap(), run) }?;
+        let mut result: Json = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
+        if result["success"] != true && !bank.committed.borrow().is_empty() {
+            return Err("failed bank execution leaked effects".to_string());
+        }
+        result["bankVersion"] = json!(1);
+        result["balances"] =
+            serde_json::to_value(&*bank.committed.borrow()).map_err(|e| e.to_string())?;
+        let bytes = serde_json::to_vec(&result).map_err(|e| e.to_string())?;
+        if bytes.len() > MAX_BYTES {
+            return Err("output exceeds harness limit".to_string());
+        }
+        Ok(bytes)
+    }));
+    match outcome {
+        Ok(Ok(bytes)) => {
+            let mut boxed = bytes.into_boxed_slice();
+            unsafe {
+                *output = Buffer {
+                    data: boxed.as_mut_ptr(),
+                    len: boxed.len(),
+                };
+            }
+            std::mem::forget(boxed);
+            0
+        }
+        Ok(Err(_)) => 2,
+        Err(_) => 3,
+    }
+}
+
 fn execute_abi(
     input: *const u8,
     len: usize,
@@ -622,6 +735,7 @@ mod tests {
             committed: BTreeMap::new(),
             read_bytes: Rc::new(Cell::new(0)),
             read_count: Rc::new(Cell::new(0)),
+            bank: None,
         }
     }
 

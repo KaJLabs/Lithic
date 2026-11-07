@@ -33,6 +33,16 @@ const nativeExecutionGasCap uint64 = 10_000_000
 // ExecuteFrame uses real Evmos cache/snapshot journalling. The environment must
 // come from consensus, not the request; this package provides no public RPC.
 func ExecuteFrame(db *statedb.StateDB, key storetypes.StoreKey, frame *vm.Contract, readOnly bool, env Environment, request Request) (response Response, err error) {
+	return executeFrameProfile(db, key, frame, readOnly, env, request, nil)
+}
+
+type frameEffects struct {
+	bindMeter func(*frameMeter)
+	execute   func(Request, Reader, Charger) (Response, error)
+	prepare   func(*frameMeter) (func() error, []*ethtypes.Log, error)
+}
+
+func executeFrameProfile(db *statedb.StateDB, key storetypes.StoreKey, frame *vm.Contract, readOnly bool, env Environment, request Request, effects *frameEffects) (response Response, err error) {
 	if readOnly || frame.Address() != LabAddress || frame.Value().Sign() != 0 {
 		return Response{}, errors.New("unsupported static/delegate/payable frame")
 	}
@@ -61,6 +71,9 @@ func ExecuteFrame(db *statedb.StateDB, key storetypes.StoreKey, frame *vm.Contra
 	request.BlockHeight = env.Height
 	request.BlockTimestamp = env.Timestamp
 	meter := frameMeter{frame: frame, remaining: request.GasLimit}
+	if effects != nil {
+		effects.bindMeter(&meter)
+	}
 	var nativeCharged uint64
 	// Capture original records for delta accounting. No native write is applied
 	// until every charge and response validation below succeeds.
@@ -81,7 +94,11 @@ func ExecuteFrame(db *statedb.StateDB, key storetypes.StoreKey, frame *vm.Contra
 		originals[k] = value
 		return value, nil
 	}
-	response, err = ExecuteMetered(request, read, func(gas uint64) error {
+	executeNative := ExecuteMetered
+	if effects != nil {
+		executeNative = effects.execute
+	}
+	response, err = executeNative(request, read, func(gas uint64) error {
 		if err := meter.charge(gas); err != nil {
 			return err
 		}
@@ -143,6 +160,21 @@ func ExecuteFrame(db *statedb.StateDB, key storetypes.StoreKey, frame *vm.Contra
 			return Response{}, err
 		}
 	}
+	var applyEffects func() error
+	var additionalLogs []*ethtypes.Log
+	if effects != nil {
+		applyEffects, additionalLogs, err = effects.prepare(&meter)
+		if err != nil {
+			db.RevertToSnapshot(snapshot)
+			return Response{}, err
+		}
+		for _, log := range additionalLogs {
+			if err := meter.charge(gasCost(candidateLogFlat, candidateLogByte, uint64(len(log.Data)))); err != nil {
+				db.RevertToSnapshot(snapshot)
+				return Response{}, err
+			}
+		}
+	}
 	if err := db.AddPrecompileFn(LabAddress, oldStore, oldEvents); err != nil {
 		db.RevertToSnapshot(snapshot)
 		return Response{}, err
@@ -158,6 +190,15 @@ func ExecuteFrame(db *statedb.StateDB, key storetypes.StoreKey, frame *vm.Contra
 	}
 	if len(response.Events) > 0 || len(response.Deployments) > 0 {
 		db.AddLog(&ethtypes.Log{Address: LabAddress, Topics: []common.Hash{crypto.Keccak256Hash([]byte("LithoNativeLab(bytes)"))}, Data: logs})
+	}
+	if applyEffects != nil {
+		if err := applyEffects(); err != nil {
+			db.RevertToSnapshot(snapshot)
+			return Response{}, err
+		}
+	}
+	for _, log := range additionalLogs {
+		db.AddLog(log)
 	}
 	return response, nil
 }

@@ -1,0 +1,451 @@
+From 315ab5da4a06ad6e8db2e06910ddc0449f3d4940 Mon Sep 17 00:00:00 2001
+From: bachal-abro <mbachalabro1@gmail.com>
+Date: Sat, 7 Nov 2026 13:25:31 +0500
+Subject: [PATCH] feat: add separately gated native bank custody journal
+
+---
+ docs/NATIVE_CUSTODY_CANDIDATE.md            |  34 ++++++
+ x/evm/keeper/native_custody_lab.go          |  29 +++++
+ x/evm/keeper/native_custody_lab_test.go     | 123 ++++++++++++++++++++
+ x/evm/keeper/testdata/native_custody.json   |  92 +++++++++++++++
+ x/evm/keeper/testdata/native_custody.lithic |  19 +++
+ x/evm/statedb/native_balance.go             |  95 +++++++++++++++
+ 6 files changed, 392 insertions(+)
+ create mode 100644 docs/NATIVE_CUSTODY_CANDIDATE.md
+ create mode 100644 x/evm/keeper/native_custody_lab.go
+ create mode 100644 x/evm/keeper/native_custody_lab_test.go
+ create mode 100644 x/evm/keeper/testdata/native_custody.json
+ create mode 100644 x/evm/keeper/testdata/native_custody.lithic
+ create mode 100644 x/evm/statedb/native_balance.go
+
+diff --git a/docs/NATIVE_CUSTODY_CANDIDATE.md b/docs/NATIVE_CUSTODY_CANDIDATE.md
+new file mode 100644
+index 0000000..848b220
+--- /dev/null
++++ b/docs/NATIVE_CUSTODY_CANDIDATE.md
+@@ -0,0 +1,34 @@
++# Separately disabled native custody extension
++
++This additive chain candidate pairs with Lithic's `feat/native-custody-20261107`
++branch. It must not be substituted into a previously reviewed binary/source pin.
++No activation, upgrade height, live denomination, genesis or store schema is
++changed here. Default builds retain the existing nonpayable gateway behavior.
++
++Both `lithovm_chain_lab,lithovm_bank_candidate` tags are required to select the
++bank-backed profile. Its matching Rust library must export `lithovm_execute_v3`.
++The new StateDB helpers access the existing balance journal; they do not create
++a native balance store. SDK bank/account commit remains the ordinary EVM path.
++The candidate keeper policy rejects module, blocked and non-EVM auth accounts.
++Actual bank/auth reads restore the pinned SDK KV rates even inside an EVM query
++context that otherwise has zero KV pricing, and consume the same native frame
++budget. New bookkeeping rates are provisional, subject to Foundation review.
++
++Local tests in `native_custody_lab_test.go` exercise simulation, prefunding,
++signed-message gateway deployment, failure rollback, successful native transfer
++and exact SDK supply conservation against the real synthetic application. The
++integration module additionally tests enclosing EVM revert and OOG/policy
++failure after a partial journal settlement. None starts a network node.
++
++With the matching compiler/FFI and disclosed SDK compatibility patches:
++
++```sh
++go test -tags lithovm_chain_lab,lithovm_bank_candidate ./x/evm/keeper \
++  -run 'TestKeeperTestSuite/(TestNativeCustody|TestLithoVMCandidate)'
++```
++
++The fixture is generated with the matching compiler:
++`lithc --emit lithovm x/evm/keeper/testdata/native_custody.lithic`.
++Keep the emitted JSON/source comparison as review evidence. Final chain/FFI
++pins, security review, gas/custody policy, upgrade and ulitho compatibility,
++network tests and production approval remain required before use.
+diff --git a/x/evm/keeper/native_custody_lab.go b/x/evm/keeper/native_custody_lab.go
+new file mode 100644
+index 0000000..6d02bd1
+--- /dev/null
++++ b/x/evm/keeper/native_custody_lab.go
+@@ -0,0 +1,29 @@
++//go:build lithovm_bank_candidate
++
++package keeper
++
++import (
++	"errors"
++	sdk "github.com/cosmos/cosmos-sdk/types"
++	"github.com/ethereum/go-ethereum/common"
++	evmostypes "github.com/evmos/evmos/v20/types"
++)
++
++// ValidateNativeBalanceAddress grants no mint/burn authority. Native custody
++// uses the ordinary EVM balance journal/commit path, retaining module-account
++// and blocked-address protections. This policy is absent from ordinary builds.
++func (k *Keeper) ValidateNativeBalanceAddress(ctx sdk.Context, addr common.Address) error {
++	account := k.accountKeeper.GetAccount(ctx, sdk.AccAddress(addr.Bytes()))
++	if account != nil {
++		if _, module := account.(sdk.ModuleAccountI); module {
++			return errors.New("native custody cannot access module accounts")
++		}
++		if _, ethereum := account.(evmostypes.EthAccountI); !ethereum {
++			return errors.New("native custody requires an EVM-compatible bank account")
++		}
++	}
++	if k.bankKeeper.BlockedAddr(sdk.AccAddress(addr.Bytes())) {
++		return errors.New("native custody cannot access blocked bank accounts")
++	}
++	return nil
++}
+diff --git a/x/evm/keeper/native_custody_lab_test.go b/x/evm/keeper/native_custody_lab_test.go
+new file mode 100644
+index 0000000..4f92915
+--- /dev/null
++++ b/x/evm/keeper/native_custody_lab_test.go
+@@ -0,0 +1,123 @@
++//go:build lithovm_chain_lab && lithovm_bank_candidate
++
++package keeper_test
++
++import (
++	"bytes"
++	_ "embed"
++	"encoding/hex"
++	"encoding/json"
++	"fmt"
++	"math/big"
++	"strings"
++
++	storetypes "cosmossdk.io/store/types"
++	sdk "github.com/cosmos/cosmos-sdk/types"
++	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
++	"github.com/ethereum/go-ethereum/common"
++	"github.com/ethereum/go-ethereum/crypto"
++	evmtypes "github.com/evmos/evmos/v20/x/evm/types"
++	nativechain "lithic.local/native-chain-lab"
++)
++
++// Compiled from the adjacent native_custody.lithic using the candidate lithc.
++//
++//go:embed testdata/native_custody.json
++var custodyArtifact []byte
++
++func (suite *KeeperTestSuite) TestNativeCustodyPolicyRejectsModuleAndNonEVMAccounts() {
++	suite.SetupTest()
++	ctx := suite.network.GetContext()
++	app := suite.network.App
++	ordinary := suite.keyring.GetAddr(0)
++	suite.Require().NoError(app.EvmKeeper.ValidateNativeBalanceAddress(ctx, ordinary))
++	module := app.AccountKeeper.GetModuleAddress(evmtypes.ModuleName)
++	suite.Require().NotEmpty(module)
++	suite.Require().Error(app.EvmKeeper.ValidateNativeBalanceAddress(ctx, common.BytesToAddress(module)))
++	plain := common.HexToAddress("0x8801")
++	account := app.AccountKeeper.NewAccount(ctx, authtypes.NewBaseAccountWithAddress(sdk.AccAddress(plain.Bytes())))
++	app.AccountKeeper.SetAccount(ctx, account)
++	suite.Require().Error(app.EvmKeeper.ValidateNativeBalanceAddress(ctx, plain))
++	absent := common.HexToAddress("0x8802")
++	meter := storetypes.NewInfiniteGasMeter()
++	suite.Require().NoError(app.EvmKeeper.ValidateNativeBalanceAddress(ctx.WithGasMeter(meter), absent))
++	suite.Require().Greater(meter.GasConsumed(), uint64(0), "auth policy read escaped SDK meter")
++}
++
++// Exercise the actual EVM message transition, account keeper and bank keeper.
++// This is a local synthetic application test, with no node or RPC listener.
++func (suite *KeeperTestSuite) TestNativeCustodySignedMessageBankSupplyAndRollback() {
++	suite.enableFeemarket = true
++	defer func() { suite.enableFeemarket = false }()
++	suite.SetupTest()
++	ctx := suite.network.GetContext()
++	app := suite.network.App
++	sender := suite.keyring.GetKey(0)
++	var artifact struct {
++		Bytecode string `json:"bytecode"`
++	}
++	suite.Require().NoError(json.Unmarshal(custodyArtifact, &artifact))
++	code, err := hex.DecodeString(strings.TrimPrefix(artifact.Bytecode, "0x"))
++	suite.Require().NoError(err)
++	owner := suite.keyring.GetAddr(0)
++	recipient := common.HexToAddress("0x7701")
++	ownerArgs, err := hex.DecodeString(fmt.Sprintf("4c56414c01000104%064x", owner.Bytes()))
++	suite.Require().NoError(err)
++	deploy, err := nativechain.EncodeGatewayDeploy(code, crypto.Keccak256Hash([]byte("initialize(address)")), ownerArgs)
++	suite.Require().NoError(err)
++	cfg, err := app.EvmKeeper.EVMConfig(ctx, ctx.BlockHeader().ProposerAddress, suite.network.GetEIP155ChainID())
++	suite.Require().NoError(err)
++	invoke := func(payload []byte, to common.Address, value *big.Int, commit bool) *evmtypes.MsgEthereumTxResponse {
++		msg, err := suite.factory.GenerateGethCoreMsg(sender.Priv, evmtypes.EvmTxArgs{To: &to, Amount: value, Input: payload, GasLimit: 10000000})
++		suite.Require().NoError(err)
++		result, err := app.EvmKeeper.ApplyMessageWithConfig(ctx, msg, nil, commit, cfg, app.EvmKeeper.TxConfig(ctx, common.Hash{}))
++		suite.Require().NoError(err)
++		return result
++	}
++	// Dry deployment predicts the address but must not create native state.
++	preview := invoke(deploy, nativechain.LabAddress, big.NewInt(0), false)
++	suite.Require().False(preview.Failed(), preview.VmError)
++	raw, err := nativechain.DecodeGatewayResult(preview.Ret)
++	suite.Require().NoError(err)
++	suite.Require().Len(raw, 40)
++	vault := common.BytesToAddress(raw[20:])
++	nativeKey := []byte("lithovm/v1/contracts/" + hex.EncodeToString(vault.Bytes()))
++	key := app.GetKey("lithovm")
++	suite.Require().False(ctx.KVStore(key).Has(nativeKey))
++	// Ordinary native EVM transfer funds the address before deployment.
++	funded := invoke(nil, vault, big.NewInt(100), true)
++	suite.Require().False(funded.Failed(), funded.VmError)
++	beforeSupply := app.BankKeeper.GetSupply(ctx, cfg.Params.EvmDenom)
++	deployed := invoke(deploy, nativechain.LabAddress, big.NewInt(0), true)
++	suite.Require().False(deployed.Failed(), deployed.VmError)
++	suite.Require().Equal(int64(100), app.EvmKeeper.GetBalance(ctx, vault).Int64())
++	suite.Require().True(ctx.KVStore(key).Has(nativeKey))
++	pay := func(accept bool) []byte {
++		flag := 0
++		if accept {
++			flag = 1
++		}
++		args, err := hex.DecodeString(fmt.Sprintf("4c56414c01000304%064x02%064x03%064x", recipient.Bytes(), 7, flag))
++		suite.Require().NoError(err)
++		payload, err := nativechain.EncodeGatewayCall(vault, crypto.Keccak256Hash([]byte("pay(address,u256,bool)")), args)
++		suite.Require().NoError(err)
++		return payload
++	}
++	beforeRecord := append([]byte(nil), ctx.KVStore(key).Get(nativeKey)...)
++	// Simulation and native require failure both discard every state layer.
++	simulation := invoke(pay(true), nativechain.LabAddress, big.NewInt(0), false)
++	suite.Require().False(simulation.Failed(), simulation.VmError)
++	failed := invoke(pay(false), nativechain.LabAddress, big.NewInt(0), true)
++	suite.Require().True(failed.Failed())
++	suite.Require().Empty(failed.Logs)
++	suite.Require().Equal(int64(100), app.EvmKeeper.GetBalance(ctx, vault).Int64())
++	suite.Require().Zero(app.EvmKeeper.GetBalance(ctx, recipient).Sign())
++	suite.Require().True(bytes.Equal(beforeRecord, ctx.KVStore(key).Get(nativeKey)))
++	paid := invoke(pay(true), nativechain.LabAddress, big.NewInt(0), true)
++	suite.Require().False(paid.Failed(), paid.VmError)
++	suite.Require().Len(paid.Logs, 2)
++	suite.Require().Equal(int64(93), app.EvmKeeper.GetBalance(ctx, vault).Int64())
++	suite.Require().Equal(int64(7), app.EvmKeeper.GetBalance(ctx, recipient).Int64())
++	suite.Require().Equal(beforeSupply, app.BankKeeper.GetSupply(ctx, cfg.Params.EvmDenom), "native settlement changed SDK supply")
++	suite.Require().False(bytes.Equal(beforeRecord, ctx.KVStore(key).Get(nativeKey)))
++}
+diff --git a/x/evm/keeper/testdata/native_custody.json b/x/evm/keeper/testdata/native_custody.json
+new file mode 100644
+index 0000000..69a6e03
+--- /dev/null
++++ b/x/evm/keeper/testdata/native_custody.json
+@@ -0,0 +1,92 @@
++{
++  "artifactVersion": 1,
++  "compiler": "lithc",
++  "compilerVersion": "0.2.0",
++  "contractName": "Vault",
++  "target": "lithovm-native-v11",
++  "bytecodeVersion": 11,
++  "sourceHash": "0x1d7fbe9e8002f2f1483ae42ff5228bf91fd5b5ab865928f8bf6684e381c7b55f",
++  "codeHash": "0x67d02a789fb2fbe413ecdac6095399e226c438a7f25c2525319c2d22aeb7a947",
++  "entrypoints": [
++    {
++      "name": "initialize",
++      "signature": "initialize(address)",
++      "selector": "0xc4d66de8473e8f74cb05df264ee8262da16b56717ef1f05d73bfdcea3adc85e5"
++    },
++    {
++      "name": "pay",
++      "signature": "pay(address,u256,bool)",
++      "selector": "0xffc6870d82b96c165f8903768a2c45c974c228b720e703f5efab92225464c0e4"
++    },
++    {
++      "name": "sent",
++      "signature": "sent()",
++      "selector": "0xc2bfccc09b0ae6b6b7e7235a0af2a3cbdc056cf6d0d49b001fa054396c3584a6"
++    }
++  ],
++  "abi": [
++    {
++      "inputs": [
++        {
++          "name": "to",
++          "type": "address"
++        },
++        {
++          "name": "amount",
++          "type": "u256"
++        }
++      ],
++      "name": "Paid",
++      "type": "event"
++    },
++    {
++      "inputs": [
++        {
++          "name": "owner",
++          "type": "address"
++        }
++      ],
++      "name": "initialize",
++      "outputs": [
++        {
++          "type": "bool"
++        }
++      ],
++      "type": "function"
++    },
++    {
++      "inputs": [
++        {
++          "name": "to",
++          "type": "address"
++        },
++        {
++          "name": "amount",
++          "type": "u256"
++        },
++        {
++          "name": "accept",
++          "type": "bool"
++        }
++      ],
++      "name": "pay",
++      "outputs": [
++        {
++          "type": "u256"
++        }
++      ],
++      "type": "function"
++    },
++    {
++      "inputs": [],
++      "name": "sent",
++      "outputs": [
++        {
++          "type": "u256"
++        }
++      ],
++      "type": "function"
++    }
++  ],
++  "bytecode": "0x4c4954484f564d0b0003000b696e697469616c697a65640300056f776e657204000473656e74020000000100045061696400020002746f040006616d6f756e74020003000a696e697469616c697a65000104030400040b00030a0000010300000000000000000000000000000000000000000000000000000000000000000704000000010103000000000000000000000000000000000000000000000000000000000000000104000100010200000200010103000000000000000000000000000000000000000000000000000000000000000100037061790003040203020400060b00030b0a000107060001020000000102000104000200030a0002020001110500000002000102000000010200010b00010200020200010a0002000473656e740000020300010a0002"
++}
+diff --git a/x/evm/keeper/testdata/native_custody.lithic b/x/evm/keeper/testdata/native_custody.lithic
+new file mode 100644
+index 0000000..90ac457
+--- /dev/null
++++ b/x/evm/keeper/testdata/native_custody.lithic
+@@ -0,0 +1,19 @@
++contract Vault {
++    state { initialized: bool; owner: address; sent: u256; }
++    event Paid { to: address, amount: u256 }
++    pub fn initialize(owner: address) -> bool {
++        require(self.initialized == false);
++        self.initialized = true;
++        self.owner = owner;
++        return true;
++    }
++    pub fn pay(to: address, amount: u256, accept: bool) -> u256 {
++        require(msg.sender == self.owner);
++        transfer_native(to, amount);
++        self.sent = self.sent + amount;
++        emit Paid { to: to, amount: amount };
++        require(accept);
++        return self.sent;
++    }
++    pub fn sent() -> u256 { return self.sent; }
++}
+diff --git a/x/evm/statedb/native_balance.go b/x/evm/statedb/native_balance.go
+new file mode 100644
+index 0000000..9e4eb63
+--- /dev/null
++++ b/x/evm/statedb/native_balance.go
+@@ -0,0 +1,95 @@
++// Copyright Tharsis Labs Ltd.(Evmos)
++// SPDX-License-Identifier:ENCL-1.0(https://github.com/evmos/evmos/blob/main/LICENSE)
++package statedb
++
++import (
++	"errors"
++	"math/big"
++
++	storetypes "cosmossdk.io/store/types"
++	sdk "github.com/cosmos/cosmos-sdk/types"
++	"github.com/ethereum/go-ethereum/common"
++)
++
++// NativeBalancePolicy is implemented only by the separately enabled custody
++// keeper. A generic StateDB keeper must not silently grant native bank access.
++type NativeBalancePolicy interface {
++	ValidateNativeBalanceAddress(sdk.Context, common.Address) error
++}
++
++// ReadNativeBalance returns the current EVM-frame balance, including prior
++// journalled transfers, while forwarding actual SDK reads through the supplied
++// gas meter. It never changes SDK context/state or exposes a mutable balance.
++func (s *StateDB) ReadNativeBalance(addr common.Address, meter storetypes.GasMeter) (*big.Int, bool, error) {
++	object, err := s.nativeBalanceObject(addr, meter)
++	if err != nil {
++		return nil, false, err
++	}
++	if object == nil {
++		return new(big.Int), false, nil
++	}
++	return new(big.Int).Set(object.Balance()), true, nil
++}
++
++// ApplyNativeBalance journals one prevalidated bank change. It keeps existing
++// nonce/code intact and performs no SDK write before the ordinary EVM commit.
++func (s *StateDB) ApplyNativeBalance(addr common.Address, before, after *big.Int, meter storetypes.GasMeter) error {
++	if before == nil || after == nil || before.Sign() < 0 || before.BitLen() > 256 || after.Sign() < 0 || after.BitLen() > 256 {
++		return errors.New("native balance is outside uint256")
++	}
++	object, err := s.nativeBalanceObject(addr, meter)
++	if err != nil {
++		return err
++	}
++	current := new(big.Int)
++	if object != nil {
++		current.Set(object.Balance())
++	}
++	if current.Cmp(before) != 0 {
++		return errors.New("native balance changed before settlement")
++	}
++	if object == nil {
++		// Already checked with the metered keeper above. Do not perform a
++		// second unmetered getOrNewStateObject lookup here.
++		object = newObject(s, addr, Account{})
++		s.journal.append(createObjectChange{account: &addr})
++		s.setStateObject(object)
++	}
++	object.SetBalance(new(big.Int).Set(after))
++	return nil
++}
++
++func (s *StateDB) nativeBalanceObject(addr common.Address, meter storetypes.GasMeter) (*stateObject, error) {
++	policy, ok := s.keeper.(NativeBalancePolicy)
++	if !ok || meter == nil {
++		return nil, errors.New("native custody policy/meter unavailable")
++	}
++	// EVM ante/query contexts intentionally zero SDK KV pricing. Native bank
++	// reads are additional work, so restore the pinned SDK schedule explicitly
++	// for these reads only. Otherwise estimateGas underprices the same call.
++	ctx := s.ctx.WithGasMeter(meter).
++		WithKVGasConfig(storetypes.KVGasConfig()).
++		WithTransientKVGasConfig(storetypes.TransientGasConfig())
++	if err := policy.ValidateNativeBalanceAddress(ctx, addr); err != nil {
++		return nil, err
++	}
++	// Use the same live object cache as GetBalance: a raw bank query would miss
++	// transfers staged earlier in this EVM transaction.
++	object := s.stateObjects[addr]
++	if object != nil && object.suicided {
++		return nil, errors.New("native custody cannot settle a self-destructed EVM account")
++	}
++	if object == nil {
++		account := s.keeper.GetAccount(ctx, addr)
++		if account == nil {
++			return nil, nil
++		}
++		object = newObject(s, addr, *account)
++		s.setStateObject(object)
++	}
++	value := object.Balance()
++	if value.Sign() < 0 || value.BitLen() > 256 {
++		return nil, errors.New("native balance is outside uint256")
++	}
++	return object, nil
++}
+-- 
+2.51.0.windows.1
+
