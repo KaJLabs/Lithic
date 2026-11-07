@@ -31,6 +31,19 @@ the exact source commit, tree and policy. Dirty local candidates are labelled
 The script builds twice in independent source/target directories with path
 remapping and a source-commit timestamp. It compares all six executable/library
 payloads byte-for-byte and fails without emitting an archive on any difference.
+New packages declare build policy `cargo-target-release-v1`. For both builds,
+the packager checks Cargo's actual `compiler-artifact` profiles: all target
+artifacts must have optimization level 3, debug assertions disabled and test mode
+disabled. Every compiler/tool and native-runtime component must be present;
+target dependencies are checked too. Host build scripts and procedural macros
+are excluded from this target policy. The macOS final FFI relink is checked
+separately. The normalized profiles, including overflow-check settings, are
+recorded in `build-evidence.json` and must match between independent builds.
+An environment or Cargo configuration override that makes a target artifact
+unoptimized fails before packaging, even when `--release` was requested.
+Historical archives without this build-policy field retain their old checks;
+they do not acquire optimization evidence retroactively.
+
 It then runs the packaged compiler and native FFI v2 together: compile a small
 contract, deploy into callback-backed local state, call and verify the result,
 check live fuel callbacks and reject an invalid call without durable effects.

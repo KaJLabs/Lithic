@@ -22,6 +22,17 @@ import zipfile
 
 TOOLS = ('lithc', 'lithverify', 'lithdev', 'lithfmt', 'lithlint')
 ROOT = Path(__file__).resolve().parents[1]
+BUILD_PROFILE_POLICY = 'cargo-target-release-v1'
+RELEASE_COMPONENTS = {
+    **{name: 'packages/compiler/lithc/Cargo.toml' for name in ('lithc', 'lithverify', 'lithdev')},
+    **{name: f'packages/compiler/{name}/Cargo.toml' for name in ('lithfmt', 'lithlint')},
+    **{name.replace('-', '_'): f'packages/compiler/{name}/Cargo.toml'
+       for name in ('lithic-syntax', 'lithic-evm', 'lithic-lithovm')},
+    **{name.replace('-', '_'): f'packages/vm/{directory}/Cargo.toml' for name, directory in (
+        ('lithovm', 'lithovm'), ('lithovm-ffi', 'lithovm-ffi'), ('lithovm-host', 'lithovm-host'),
+        ('lithovm-bytecode', 'bytecode'), ('lithovm-receipts', 'receipts'),
+        ('lithovm-zk-verifier', 'zk-verifier'))},
+}
 SMOKE = b'''contract ReleaseSmoke {
     pub fn answer() -> u64 { return 42; }
 }
@@ -160,6 +171,84 @@ def native_library_link_args(target):
     return []
 
 
+def validate_profiles(profiles, required=RELEASE_COMPONENTS):
+    """Validate Cargo's effective settings, not the requested profile name."""
+    if not isinstance(profiles, list) or not profiles:
+        raise ValueError('missing Cargo release profiles')
+    seen, components = set(), set()
+    for row in profiles:
+        if not isinstance(row, dict) or set(row) != {'package', 'target', 'kind', 'profile'}:
+            raise ValueError('invalid Cargo release profile record')
+        package, name, kind, profile = (row[k] for k in ('package', 'target', 'kind', 'profile'))
+        if not isinstance(package, str) or not isinstance(name, str) or not isinstance(kind, list) or \
+                not kind or any(not isinstance(k, str) for k in kind):
+            raise ValueError('invalid Cargo release profile identity')
+        key = (package, name, tuple(kind))
+        if key in seen:
+            raise ValueError('duplicate Cargo release profile')
+        seen.add(key)
+        if not isinstance(profile, dict) or profile.get('opt_level') != '3' or \
+                profile.get('debug_assertions') is not False or profile.get('test') is not False or \
+                type(profile.get('overflow_checks')) is not bool:
+            raise ValueError('non-production Cargo release profile: ' + name)
+        if name in required and package == 'workspace:' + required[name]:
+            expected = 'bin' if name in TOOLS else 'cdylib' if name == 'lithovm_ffi' else 'lib'
+            if expected not in kind:
+                raise ValueError('incorrect Cargo release profile target kind: ' + name)
+            components.add(name)
+    if components != set(required):
+        raise ValueError('missing Cargo release profile components: ' + ', '.join(sorted(set(required) - components)))
+
+
+def cargo_profiles(raw, root, target, required=RELEASE_COMPONENTS):
+    # Cargo reports host build scripts/proc macros separately from target
+    # artifacts. They may legitimately use the unoptimized build-override.
+    # https://doc.rust-lang.org/cargo/reference/external-tools.html#artifact-messages
+    destination = (root / 'target' / target / 'release').resolve()
+    profiles, finished = [], []
+    for line in raw.splitlines():
+        if not line.startswith(b'{'):
+            continue  # Cargo cannot control arbitrary build-tool stdout.
+        message = json.loads(line)
+        if message.get('reason') == 'build-finished':
+            finished.append(message.get('success'))
+        if message.get('reason') != 'compiler-artifact' or not any(
+                Path(name).resolve().is_relative_to(destination) for name in message['filenames']):
+            continue
+        manifest = Path(message['manifest_path']).resolve()
+        package = ('workspace:' + manifest.relative_to(root).as_posix()
+                   if manifest.is_relative_to(root) else message['package_id'])
+        if package.startswith('path+'):
+            raise ValueError('Cargo release profile has an external path dependency')
+        profiles.append({'package': package, 'target': message['target']['name'],
+                         'kind': sorted(message['target']['kind']), 'profile': message['profile']})
+    if finished != [True]:
+        raise ValueError('Cargo release profile stream did not finish successfully')
+    profiles.sort(key=lambda row: (row['package'], row['target'], row['kind']))
+    validate_profiles(profiles, required)
+    return profiles
+
+
+def build_release_profiles(argv, root, env, target, required=RELEASE_COMPONENTS):
+    raw = run([*argv, '--message-format=json'], cwd=root, env=env)
+    return cargo_profiles(raw, root, target, required)
+
+
+def verify_build_profiles(evidence, target):
+    if evidence.get('build_profile_policy') != BUILD_PROFILE_POLICY:
+        raise ValueError('unsupported Cargo release profile policy')
+    builds = evidence.get('cargo_profiles')
+    if not isinstance(builds, list) or len(builds) != 2 or builds[0] != builds[1]:
+        raise ValueError('independent Cargo release profiles differ or are missing')
+    stages = {'build', 'native_library_relink'} if native_library_link_args(target) else {'build'}
+    for build in builds:
+        if not isinstance(build, dict) or set(build) != stages:
+            raise ValueError('missing Cargo release profile build stage')
+        validate_profiles(build['build'])
+        if 'native_library_relink' in stages:
+            validate_profiles(build['native_library_relink'], {'lithovm_ffi': RELEASE_COMPONENTS['lithovm_ffi']})
+
+
 def sbom(metadata, lock):
     checksums = {(p['name'], p['version'], p.get('source')): p.get('checksum')
                  for p in lock['package']}
@@ -288,6 +377,12 @@ def verify_archive(raw):
         raise ValueError('unsupported release smoke profile')
     if not required <= set(files):
         raise ValueError('release is missing a required compiler/runtime artifact')
+    # Historical archives predate this evidence contract and retain their
+    # original validation rules. Newly declared profiles cannot omit it.
+    if 'build_profile_policy' in manifest:
+        if manifest['build_profile_policy'] != BUILD_PROFILE_POLICY:
+            raise ValueError('unsupported Cargo release profile policy')
+        verify_build_profiles(json.loads(files['build-evidence.json']), manifest['target'])
     return manifest
 
 
@@ -658,7 +753,7 @@ def build(args):
     if args.target != host:
         raise ValueError('release smoke must run on its native target host')
     names = artifact_names(args.target)
-    builds, roots = [], []
+    builds, roots, build_profiles = [], [], []
     with tempfile.TemporaryDirectory(prefix='lithic-release-') as directory:
         temporary = Path(directory)
         for index in range(2):
@@ -675,20 +770,28 @@ def build(args):
             env.update(SOURCE_DATE_EPOCH=str(epoch), CARGO_INCREMENTAL='0',
                        CARGO_ENCODED_RUSTFLAGS=release_rustflags(args.target, root))
             flags = ['--offline'] if args.offline else []
-            run(['cargo', '+' + toolchain, 'build', '--release', '--locked', *flags,
+            profiles = {'build': build_release_profiles([
+                 'cargo', '+' + toolchain, 'build', '--release', '--locked', *flags,
                  '--target', args.target, '--target-dir', str(root / 'target'),
-                 '-p', 'lithc', '-p', 'lithfmt', '-p', 'lithlint', '-p', 'lithovm-ffi'], cwd=root, env=env)
+                 '-p', 'lithc', '-p', 'lithfmt', '-p', 'lithlint', '-p', 'lithovm-ffi'], root, env, args.target)}
             library_args = native_library_link_args(args.target)
             if library_args:
-                run(['cargo', '+' + toolchain, 'rustc', '--release', '--locked', *flags,
+                # Keep Cargo options before rustc's `--` boundary.
+                raw = run(['cargo', '+' + toolchain, 'rustc', '--release', '--locked', *flags,
+                     '--message-format=json',
                      '--target', args.target, '--target-dir', str(root / 'target'),
                      '-p', 'lithovm-ffi', '--lib', '--', *library_args], cwd=root, env=env)
+                profiles['native_library_relink'] = cargo_profiles(raw, root, args.target,
+                    {'lithovm_ffi': RELEASE_COMPONENTS['lithovm_ffi']})
+            build_profiles.append(profiles)
             binaries = {dest: (root / 'target' / args.target / 'release' / name).read_bytes()
                         for name, dest in names.items()}
             builds.append(binaries)
             if index == 0:
                 metadata = json.loads(run(['cargo', '+' + toolchain, 'metadata', '--locked',
                     '--format-version', '1', '--filter-platform', args.target, *flags], cwd=root, env=env))
+        verify_build_profiles({'build_profile_policy': BUILD_PROFILE_POLICY,
+                               'cargo_profiles': build_profiles}, args.target)
         if builds[0] != builds[1]:
             preserve_rebuild_failure(builds, roots, output, args.target, commit)
             changed = [name for name in builds[0] if builds[0][name] != builds[1][name]]
@@ -726,6 +829,7 @@ def build(args):
                  'source_input_policy': 'working-tree-local-v1' if status else 'raw-git-blobs-v1',
                  'source_inventory_sha256': sha(canonical(source_manifest)), 'source_date_epoch': epoch,
                  'rustc': rustc, 'target': args.target, 'independent_builds': 2,
+                 'build_profile_policy': BUILD_PROFILE_POLICY, 'cargo_profiles': build_profiles,
                  'windows_reproducible_link': args.target.endswith('windows-msvc'),
                  'native_library_link_args': native_library_link_args(args.target),
                  'smoke_profile': CUSTODY_SMOKE_PROFILE,
@@ -736,6 +840,7 @@ def build(args):
         if name in source:
             files['docs/' + PurePosixPath(name).name] = source[name]
     files['manifest.json'] = canonical({'schema_version': 1, 'version': args.version,
+        'build_profile_policy': BUILD_PROFILE_POLICY,
         'target': args.target, 'smoke_profile': CUSTODY_SMOKE_PROFILE,
         'files': {n: {'bytes': len(raw), 'sha256': sha(raw)}
                                       for n, raw in sorted(files.items())}})
