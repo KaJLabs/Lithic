@@ -81,6 +81,12 @@ class ReleaseTests(unittest.TestCase):
                                                'x86_64-unknown-linux-gnu')
         self.assertIn('--message-format=json', command.call_args.args[0])
 
+    def test_cargo_canonical_paths_match_aliased_temporary_build_root(self):
+        root = Path('/build').resolve()
+        messages = self.cargo_bytes(self.cargo_messages(root))
+        self.assertEqual(release.cargo_profiles(messages, root / 'alias' / '..', 'x86_64-unknown-linux-gnu'),
+                         release.cargo_profiles(messages, root, 'x86_64-unknown-linux-gnu'))
+
     def test_new_archive_policy_requires_matching_profiles_and_macos_relink(self):
         root = Path('/build').resolve()
         for target in ('x86_64-unknown-linux-gnu', 'x86_64-pc-windows-msvc', 'aarch64-apple-darwin'):

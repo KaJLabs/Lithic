@@ -204,6 +204,9 @@ def cargo_profiles(raw, root, target, required=RELEASE_COMPONENTS):
     # Cargo reports host build scripts/proc macros separately from target
     # artifacts. They may legitimately use the unoptimized build-override.
     # https://doc.rust-lang.org/cargo/reference/external-tools.html#artifact-messages
+    # Cargo canonicalizes manifest paths; temp roots can use /var aliases or
+    # Windows short/junction paths. Compare both sides in the same namespace.
+    root = root.resolve()
     destination = (root / 'target' / target / 'release').resolve()
     profiles, finished = [], []
     for line in raw.splitlines():
