@@ -10,6 +10,8 @@ members = [
   "packages/compiler/lithlint",
   "packages/compiler/ir",
   "packages/vm/lithovm",
+  "packages/vm/lithovm-host",
+  "packages/vm/lithovm-ffi",
   "packages/vm/bytecode",
   "packages/vm/receipts",
   "packages/vm/zk-verifier",

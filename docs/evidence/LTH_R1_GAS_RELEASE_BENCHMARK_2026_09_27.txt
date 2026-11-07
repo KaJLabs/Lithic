@@ -1,0 +1,61 @@
+ok  	lithic.local/native-chain-lab	0.542s
+goos: linux
+goarch: amd64
+pkg: lithic.local/native-chain-lab
+cpu: Intel(R) Core(TM) i7-8850H CPU @ 2.60GHz
+BenchmarkCandidateGas/entries0/read         	     100	     75142 ns/op	      6586 gas/op	       697.0 record-B	   15912 B/op	     108 allocs/op
+BenchmarkCandidateGas/entries0/read         	     100	     71115 ns/op	      6586 gas/op	       697.0 record-B	   15912 B/op	     108 allocs/op
+BenchmarkCandidateGas/entries0/read         	     100	     70820 ns/op	      6586 gas/op	       697.0 record-B	   15921 B/op	     108 allocs/op
+BenchmarkCandidateGas/entries0/overwrite    	     100	     82794 ns/op	    220167 gas/op	       697.0 record-B	   18760 B/op	     113 allocs/op
+BenchmarkCandidateGas/entries0/overwrite    	     100	     88680 ns/op	    220167 gas/op	       697.0 record-B	   18760 B/op	     113 allocs/op
+BenchmarkCandidateGas/entries0/overwrite    	     100	    110281 ns/op	    220167 gas/op	       697.0 record-B	   18760 B/op	     113 allocs/op
+BenchmarkCandidateGas/entries0/grow         	     100	     93315 ns/op	    220167 gas/op	       697.0 record-B	   18760 B/op	     113 allocs/op
+BenchmarkCandidateGas/entries0/grow         	     100	     86453 ns/op	    220167 gas/op	       697.0 record-B	   18760 B/op	     113 allocs/op
+BenchmarkCandidateGas/entries0/grow         	     100	     94775 ns/op	    220167 gas/op	       697.0 record-B	   18760 B/op	     113 allocs/op
+BenchmarkCandidateGas/entries0/log256       	     100	    100207 ns/op	     13258 gas/op	       697.0 record-B	   18840 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries0/log256       	     100	    100853 ns/op	     13258 gas/op	       697.0 record-B	   18840 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries0/log256       	     100	    103531 ns/op	     13258 gas/op	       697.0 record-B	   18840 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries0/log4096      	     100	    326624 ns/op	     86218 gas/op	       697.0 record-B	   52954 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries0/log4096      	     100	    373892 ns/op	     86218 gas/op	       697.0 record-B	   52954 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries0/log4096      	     100	    278045 ns/op	     86218 gas/op	       697.0 record-B	   52955 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries0/escaped4096  	     100	    277532 ns/op	     86218 gas/op	       697.0 record-B	   52954 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries0/escaped4096  	     100	    311185 ns/op	     86218 gas/op	       697.0 record-B	   52954 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries0/escaped4096  	     100	    315534 ns/op	     86218 gas/op	       697.0 record-B	   52955 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries16/read        	     100	    358214 ns/op	     34882 gas/op	      5413 record-B	   54841 B/op	     109 allocs/op
+BenchmarkCandidateGas/entries16/read        	     100	    495694 ns/op	     34882 gas/op	      5413 record-B	   54841 B/op	     109 allocs/op
+BenchmarkCandidateGas/entries16/read        	     100	    388470 ns/op	     34882 gas/op	      5413 record-B	   54841 B/op	     109 allocs/op
+BenchmarkCandidateGas/entries16/overwrite   	     100	    359628 ns/op	    201183 gas/op	      5413 record-B	   55241 B/op	     113 allocs/op
+BenchmarkCandidateGas/entries16/overwrite   	     100	    400272 ns/op	    201183 gas/op	      5413 record-B	   55241 B/op	     113 allocs/op
+BenchmarkCandidateGas/entries16/overwrite   	     100	    374757 ns/op	    201183 gas/op	      5413 record-B	   55241 B/op	     113 allocs/op
+BenchmarkCandidateGas/entries16/grow        	     100	    389302 ns/op	    390063 gas/op	      5413 record-B	   59465 B/op	     113 allocs/op
+BenchmarkCandidateGas/entries16/grow        	     100	    393072 ns/op	    390063 gas/op	      5413 record-B	   59465 B/op	     113 allocs/op
+BenchmarkCandidateGas/entries16/grow        	     100	    365511 ns/op	    390063 gas/op	      5413 record-B	   59465 B/op	     113 allocs/op
+BenchmarkCandidateGas/entries16/log256      	     100	    386329 ns/op	     41554 gas/op	      5413 record-B	   57242 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries16/log256      	     100	    478108 ns/op	     41554 gas/op	      5413 record-B	   57242 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries16/log256      	     100	    510417 ns/op	     41554 gas/op	      5413 record-B	   57242 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries16/log4096     	     100	    601761 ns/op	    114514 gas/op	      5413 record-B	   91610 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries16/log4096     	     100	    637703 ns/op	    114514 gas/op	      5413 record-B	   91610 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries16/log4096     	     100	    652787 ns/op	    114514 gas/op	      5413 record-B	   91610 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries16/escaped4096 	     100	    717172 ns/op	    114514 gas/op	      5413 record-B	   91610 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries16/escaped4096 	     100	    746195 ns/op	    114514 gas/op	      5413 record-B	   91610 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries16/escaped4096 	     100	    719526 ns/op	    114514 gas/op	      5413 record-B	   91610 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries64/read        	     100	    995940 ns/op	    120130 gas/op	     19621 record-B	  173754 B/op	     109 allocs/op
+BenchmarkCandidateGas/entries64/read        	     100	   1027593 ns/op	    120130 gas/op	     19621 record-B	  173754 B/op	     109 allocs/op
+BenchmarkCandidateGas/entries64/read        	     100	   1018145 ns/op	    120130 gas/op	     19621 record-B	  173754 B/op	     109 allocs/op
+BenchmarkCandidateGas/entries64/overwrite   	     100	    943420 ns/op	    712671 gas/op	     19621 record-B	  174154 B/op	     113 allocs/op
+BenchmarkCandidateGas/entries64/overwrite   	     100	    864462 ns/op	    712671 gas/op	     19621 record-B	  174154 B/op	     113 allocs/op
+BenchmarkCandidateGas/entries64/overwrite   	     100	   1121249 ns/op	    712671 gas/op	     19621 record-B	  174154 B/op	     113 allocs/op
+BenchmarkCandidateGas/entries64/grow        	     100	    904356 ns/op	    901551 gas/op	     19621 record-B	  174154 B/op	     113 allocs/op
+BenchmarkCandidateGas/entries64/grow        	     100	   1415741 ns/op	    901551 gas/op	     19621 record-B	  174154 B/op	     113 allocs/op
+BenchmarkCandidateGas/entries64/grow        	     100	    858798 ns/op	    901551 gas/op	     19621 record-B	  174154 B/op	     113 allocs/op
+BenchmarkCandidateGas/entries64/log256      	     100	    884150 ns/op	    126802 gas/op	     19621 record-B	  176160 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries64/log256      	     100	   1076772 ns/op	    126802 gas/op	     19621 record-B	  176159 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries64/log256      	     100	   1051197 ns/op	    126802 gas/op	     19621 record-B	  176159 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries64/log4096     	     100	   1103042 ns/op	    199762 gas/op	     19621 record-B	  210530 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries64/log4096     	     100	   1466405 ns/op	    199762 gas/op	     19621 record-B	  210530 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries64/log4096     	     100	   1391963 ns/op	    199762 gas/op	     19621 record-B	  210530 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries64/escaped4096 	     100	   1191895 ns/op	    199762 gas/op	     19621 record-B	  210530 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries64/escaped4096 	     100	   1189340 ns/op	    199762 gas/op	     19621 record-B	  210530 B/op	     117 allocs/op
+BenchmarkCandidateGas/entries64/escaped4096 	     100	   1317647 ns/op	    199762 gas/op	     19621 record-B	  210530 B/op	     117 allocs/op
+PASS
+ok  	lithic.local/native-chain-lab	9.707s

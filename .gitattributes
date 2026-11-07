@@ -1,5 +1,12 @@
+* text=auto eol=lf
 *.sh text eol=lf
 sdk/tooling/bin/* text eol=lf
 *.rs text eol=lf
 *.lithic text eol=lf
 *.md whitespace=-blank-at-eol
+fuzz/corpus/child_creation/** -text
+fuzz/corpus/synchronous_calls/** -text
+fuzz/corpus/binary_values/** -text
+fuzz/corpus/account_authorization/** -text
+fuzz/corpus/ffi_records/** -text
+docs/evidence/LITHIC_DURABLE_TOKEN_STATE_2026_10_01.log -text

@@ -6,14 +6,26 @@
 
 use lithic_syntax::{Contract, Item, Type};
 use lithovm_bytecode::{
-    EventDefinition, Function, Instruction, Program, ReturnValue, Statement, StorageField,
-    ValueType, MAX_BLOCK_DEPTH, MAX_LOCALS, MAX_STATEMENTS, VERSION,
+    function_selector, function_signature, EventDefinition, Function, Instruction, MapField,
+    Program, ReturnValue, Statement, StorageField, ValueType, MAX_BLOCK_DEPTH, MAX_LOCALS,
+    MAX_STATEMENTS,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use std::fmt;
 
-pub const TARGET: &str = "lithovm-native-v9";
+pub const TARGET: &str = "lithovm-native-v11";
+pub const ARTIFACT_VERSION: u8 = 1;
+mod compact;
+pub mod verification;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EntrypointArtifact {
+    pub name: String,
+    pub signature: String,
+    pub selector: String,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CompiledConstant {
@@ -22,12 +34,18 @@ struct CompiledConstant {
     word: [u8; 32],
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Artifact {
+    pub artifact_version: u8,
+    pub compiler: String,
+    pub compiler_version: String,
     pub contract_name: String,
     pub target: String,
     pub bytecode_version: u8,
+    pub source_hash: String,
+    pub code_hash: String,
+    pub entrypoints: Vec<EntrypointArtifact>,
     pub abi: serde_json::Value,
     pub bytecode: String,
 }
@@ -83,14 +101,15 @@ pub fn compile(source: &str) -> Result<Artifact, CompileError> {
     if !errors.is_empty() {
         return Err(CompileError { messages: errors });
     }
-    compile_contract(&contract)
+    compile_contract(&contract, source)
 }
 
-fn compile_contract(contract: &Contract) -> Result<Artifact, CompileError> {
+fn compile_contract(contract: &Contract, source: &str) -> Result<Artifact, CompileError> {
     let mut errors = Vec::new();
     let mut functions = Vec::new();
     let mut abi = Vec::new();
     let mut storage = Vec::new();
+    let mut maps = Vec::new();
     let mut events = Vec::new();
     let mut constants = Vec::new();
 
@@ -118,7 +137,16 @@ fn compile_contract(contract: &Contract) -> Result<Artifact, CompileError> {
                         name: field.name.clone(),
                         value_type,
                     }),
-                    Err(message) => errors.push(format!("state field '{}': {message}", field.name)),
+                    Err(_) => match lower_map_type(&field.ty) {
+                        Ok((key_types, value_type)) => maps.push(MapField {
+                            name: field.name.clone(),
+                            key_types,
+                            value_type,
+                        }),
+                        Err(message) => {
+                            errors.push(format!("state field '{}': {message}", field.name))
+                        }
+                    },
                 }
             }
         }
@@ -157,14 +185,15 @@ fn compile_contract(contract: &Contract) -> Result<Artifact, CompileError> {
         match item {
             Item::Const(_) => {}
             Item::Event(_) => {}
-            Item::Func(function) => match compile_function(function, &constants, &storage, &events)
-            {
-                Ok((compiled, entry)) => {
-                    functions.push(compiled);
-                    abi.push(entry);
+            Item::Func(function) => {
+                match compile_function(function, &constants, &storage, &maps, &events) {
+                    Ok((compiled, entry)) => {
+                        functions.push(compiled);
+                        abi.push(entry);
+                    }
+                    Err(message) => errors.push(format!("function '{}': {message}", function.name)),
                 }
-                Err(message) => errors.push(format!("function '{}': {message}", function.name)),
-            },
+            }
             Item::State(_) => {}
         }
     }
@@ -175,27 +204,49 @@ fn compile_contract(contract: &Contract) -> Result<Artifact, CompileError> {
         return Err(CompileError { messages: errors });
     }
 
-    let program = Program {
+    let mut program = Program {
         storage,
+        maps,
         events,
         functions,
     };
+    compact::optimize(&mut program);
     let bytes = program
         .encode()
         .map_err(|error| CompileError::one(format!("bytecode encoding failed: {error}")))?;
+    let entrypoints = program
+        .functions
+        .iter()
+        .map(|function| EntrypointArtifact {
+            name: function.name.clone(),
+            signature: function_signature(function),
+            selector: format!("0x{}", hex::encode(function_selector(function))),
+        })
+        .collect();
     Ok(Artifact {
+        artifact_version: ARTIFACT_VERSION,
+        compiler: "lithc".to_string(),
+        compiler_version: env!("CARGO_PKG_VERSION").to_string(),
         contract_name: contract.name.clone(),
-        target: TARGET.to_string(),
-        bytecode_version: VERSION,
+        target: format!("lithovm-native-v{}", program.bytecode_version()),
+        bytecode_version: program.bytecode_version(),
+        source_hash: keccak_hex(source.as_bytes()),
+        code_hash: keccak_hex(&bytes),
+        entrypoints,
         abi: serde_json::Value::Array(abi),
         bytecode: format!("0x{}", hex::encode(bytes)),
     })
+}
+
+fn keccak_hex(bytes: &[u8]) -> String {
+    format!("0x{}", hex::encode(Keccak256::digest(bytes)))
 }
 
 fn compile_function(
     function: &lithic_syntax::FuncDecl,
     constants: &[CompiledConstant],
     storage: &[StorageField],
+    maps: &[MapField],
     events: &[EventDefinition],
 ) -> Result<(Function, serde_json::Value), String> {
     if !function.is_pub {
@@ -224,6 +275,7 @@ fn compile_function(
         &parameters,
         constants,
         storage,
+        maps,
         events,
     )?;
     let abi = serde_json::json!({
@@ -253,10 +305,30 @@ fn lower_type(value: &Type) -> Result<ValueType, String> {
             "bool" => Ok(ValueType::Bool),
             "address" => Ok(ValueType::Address),
             "bytes32" => Ok(ValueType::Bytes32),
-            other => Err(format!("type '{other}' has no native LithoVM v9 lowering")),
+            "string" => Ok(ValueType::String),
+            "bytes" => Ok(ValueType::Bytes),
+            other => Err(format!("type '{other}' has no native LithoVM v11 lowering")),
         },
         Type::Map(_, _) | Type::Vec(_) => Err("collection types are unsupported".to_string()),
     }
+}
+
+fn lower_map_type(value: &Type) -> Result<(Vec<ValueType>, ValueType), String> {
+    let Type::Map(key, value) = value else {
+        return Err("collection type must be a map".to_string());
+    };
+    let mut key_types =
+        vec![lower_type(key).map_err(|_| "map keys must be scalar LithoVM values".to_string())?];
+    let value_type = match value.as_ref() {
+        Type::Map(_, _) => {
+            let (nested_keys, value_type) = lower_map_type(value)?;
+            key_types.extend(nested_keys);
+            value_type
+        }
+        scalar => lower_type(scalar)
+            .map_err(|_| "map values must be scalar values or nested maps".to_string())?,
+    };
+    Ok((key_types, value_type))
 }
 
 fn lower_named_type(name: &str) -> Result<ValueType, String> {
@@ -266,7 +338,9 @@ fn lower_named_type(name: &str) -> Result<ValueType, String> {
         "bool" => Ok(ValueType::Bool),
         "address" => Ok(ValueType::Address),
         "bytes32" => Ok(ValueType::Bytes32),
-        other => Err(format!("type '{other}' has no native LithoVM v9 lowering")),
+        "string" => Ok(ValueType::String),
+        "bytes" => Ok(ValueType::Bytes),
+        other => Err(format!("type '{other}' has no native LithoVM v11 lowering")),
     }
 }
 
@@ -276,11 +350,19 @@ fn parse_body(
     parameter_types: &[ValueType],
     constants: &[CompiledConstant],
     storage: &[StorageField],
+    maps: &[MapField],
     events: &[EventDefinition],
 ) -> Result<ReturnValue, String> {
     let body = function.body_src.trim();
     if starts_with_keyword(body, "return") {
-        return parse_return(function, return_type, parameter_types, constants, storage);
+        return parse_return(
+            function,
+            return_type,
+            parameter_types,
+            constants,
+            storage,
+            maps,
+        );
     }
     let parameter_names = function
         .params
@@ -297,6 +379,7 @@ fn parse_body(
         local_mutability: Vec::new(),
         constants,
         storage,
+        maps,
         events,
         statement_count: 0,
         return_type,
@@ -322,9 +405,38 @@ struct BodyParser<'a> {
     local_mutability: Vec<bool>,
     constants: &'a [CompiledConstant],
     storage: &'a [StorageField],
+    maps: &'a [MapField],
     events: &'a [EventDefinition],
     statement_count: usize,
     return_type: ValueType,
+}
+
+fn is_terminal(statement: &Statement) -> bool {
+    match statement {
+        Statement::Return(_) | Statement::Revert => true,
+        Statement::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            then_branch.last().is_some_and(is_terminal)
+                && else_branch.last().is_some_and(is_terminal)
+        }
+        _ => false,
+    }
+}
+
+// v11 requires nonempty encoded blocks. A metered require(true) represents
+// a source-level empty branch without changing the bytecode format.
+fn nonempty_branch(statements: Vec<Statement>) -> Vec<Statement> {
+    if statements.is_empty() {
+        vec![Statement::Require(vec![Instruction::Constant(
+            ValueType::Bool,
+            word_from_u64(1),
+        )])]
+    } else {
+        statements
+    }
 }
 
 impl BodyParser<'_> {
@@ -360,7 +472,9 @@ impl BodyParser<'_> {
                 return Ok(statements);
             }
             if terminal {
-                return Err("unreachable statement after terminal return or branch".to_string());
+                return Err(
+                    "unreachable statement after terminal return, revert, or branch".to_string(),
+                );
             }
 
             let statement = if self.consume_keyword("let") {
@@ -369,10 +483,16 @@ impl BodyParser<'_> {
                 terminal = true;
                 self.parse_return_statement()?
             } else if self.consume_keyword("if") {
-                terminal = true;
-                self.parse_if(depth)?
+                let statement = self.parse_if(depth)?;
+                terminal = is_terminal(&statement);
+                statement
             } else if self.consume_keyword("repeat") {
                 self.parse_repeat(depth)?
+            } else if self.consume_keyword("require") {
+                self.parse_require()?
+            } else if self.consume_keyword("revert") {
+                terminal = true;
+                self.parse_revert()?
             } else if self.consume_keyword("emit") {
                 self.parse_emit()?
             } else if self.consume_keyword("transfer_native") {
@@ -408,6 +528,119 @@ impl BodyParser<'_> {
         };
         self.skip_whitespace();
         self.expect_byte(b'=', "expected '=' in local binding")?;
+        self.skip_whitespace();
+        let payload_read_only = self.consume_keyword("invoke_static_payload");
+        if payload_read_only || self.consume_keyword("invoke_payload") {
+            if mutable || annotated_type != Some(ValueType::Bytes) {
+                return Err("payload call requires an immutable bytes result binding".into());
+            }
+            self.skip_whitespace();
+            self.expect_byte(b'(', "expected '(' after payload call")?;
+            let source = self.take_expression_until(b')')?.to_owned();
+            self.skip_whitespace();
+            self.expect_byte(b';', "expected ';' after payload call")?;
+            let parts = split_arguments(&source)?;
+            if parts.len() != 3 {
+                return Err("payload call requires target, value and payload".into());
+            }
+            let mut operands = parts
+                .iter()
+                .map(|p| self.compile_expression(p))
+                .collect::<Result<Vec<_>, _>>()?;
+            for (operand, ty) in
+                operands
+                    .iter_mut()
+                    .zip([ValueType::Address, ValueType::U256, ValueType::Bytes])
+            {
+                coerce_expression(operand, ty)?;
+            }
+            if self.local_names.len() >= MAX_LOCALS {
+                return Err("too many local bindings".into());
+            }
+            self.local_names.push(name);
+            self.local_types.push(ValueType::Bytes);
+            self.local_mutability.push(false);
+            let mut operands = operands.into_iter();
+            return Ok(Statement::PayloadInvoke {
+                read_only: payload_read_only,
+                target: operands.next().unwrap().0,
+                value: operands.next().unwrap().0,
+                payload: operands.next().unwrap().0,
+            });
+        }
+        let creation = self.consume_keyword("create_contract");
+        if creation || self.consume_keyword("invoke") {
+            if mutable {
+                return Err("host result bindings must be immutable".into());
+            }
+            let return_type =
+                annotated_type.ok_or("host result requires an explicit return type")?;
+            if creation && return_type != ValueType::Address {
+                return Err("create_contract result must be address".into());
+            }
+            self.skip_whitespace();
+            self.expect_byte(b'(', "expected '(' after host operation")?;
+            let source = self.take_expression_until(b')')?.to_owned();
+            self.skip_whitespace();
+            self.expect_byte(b';', "expected ';' after host operation")?;
+            let parts = split_arguments(&source)?;
+            let operand_types = if creation {
+                vec![
+                    ValueType::Address,
+                    ValueType::Bytes32,
+                    ValueType::Bytes32,
+                    ValueType::U256,
+                ]
+            } else {
+                vec![ValueType::Address, ValueType::Bytes32, ValueType::U256]
+            };
+            if parts.len() < operand_types.len() || parts.len() > operand_types.len() + 64 {
+                return Err(
+                    "host operation requires its fixed operands and at most 64 arguments".into(),
+                );
+            }
+            let mut expressions = parts
+                .iter()
+                .map(|part| self.compile_expression(part))
+                .collect::<Result<Vec<_>, _>>()?;
+            for (index, ty) in operand_types.into_iter().enumerate() {
+                coerce_expression(&mut expressions[index], ty)?;
+            }
+            let mut expressions = expressions.into_iter();
+            let target = expressions.next().unwrap().0;
+            let selector = expressions.next().unwrap().0;
+            let initializer = if creation {
+                Some(expressions.next().unwrap().0)
+            } else {
+                None
+            };
+            let value = expressions.next().unwrap().0;
+            let arguments = expressions
+                .map(|(expression, ty)| (ty, expression))
+                .collect();
+            if self.local_names.len() >= MAX_LOCALS {
+                return Err("too many local bindings".into());
+            }
+            self.local_names.push(name);
+            self.local_types.push(return_type);
+            self.local_mutability.push(false);
+            if let Some(initializer) = initializer {
+                return Ok(Statement::Create {
+                    template: target,
+                    salt: selector,
+                    initializer,
+                    value,
+                    arguments,
+                });
+            }
+            return Ok(Statement::Invoke {
+                return_type,
+                target,
+                selector,
+                value,
+                arguments,
+            });
+        }
         let expression_source = self.take_expression_until(b';')?.to_owned();
         let (expression, inferred_type) = self.compile_expression(&expression_source)?;
         let value_type = annotated_type.unwrap_or(inferred_type);
@@ -483,28 +716,95 @@ impl BodyParser<'_> {
         Ok(Statement::Return(expression))
     }
 
+    fn parse_require(&mut self) -> Result<Statement, String> {
+        self.skip_whitespace();
+        self.expect_byte(b'(', "expected '(' after require")?;
+        let condition_source = self.take_expression_until(b')')?.to_owned();
+        let (condition, condition_type) = self.compile_expression(&condition_source)?;
+        if condition_type != ValueType::Bool {
+            return Err(format!(
+                "require condition has type {}, expected bool",
+                condition_type.name()
+            ));
+        }
+        self.skip_whitespace();
+        self.expect_byte(b';', "expected ';' after require")?;
+        Ok(Statement::Require(condition))
+    }
+
+    fn parse_revert(&mut self) -> Result<Statement, String> {
+        self.skip_whitespace();
+        self.expect_byte(b'(', "expected '(' after revert")?;
+        self.skip_whitespace();
+        self.expect_byte(b')', "revert does not accept arguments")?;
+        self.skip_whitespace();
+        self.expect_byte(b';', "expected ';' after revert")?;
+        Ok(Statement::Revert)
+    }
+
     fn parse_store(&mut self) -> Result<Statement, String> {
         let field_name = self.parse_identifier()?;
-        let field = self
+        if let Some(field) = self
             .storage
             .iter()
             .position(|candidate| candidate.name == field_name)
-            .ok_or_else(|| format!("unknown storage field '{field_name}'"))?;
-        self.skip_whitespace();
-        self.expect_byte(b'=', "expected '=' in storage assignment")?;
-        let expression_source = self.take_expression_until(b';')?.to_owned();
-        let (expression, expression_type) = self.compile_expression(&expression_source)?;
-        let field_type = self.storage[field].value_type;
-        if expression_type != field_type {
-            return Err(format!(
-                "storage field '{field_name}' has type {}, expression has type {}",
-                field_type.name(),
-                expression_type.name()
-            ));
+        {
+            self.skip_whitespace();
+            self.expect_byte(b'=', "expected '=' in storage assignment")?;
+            let expression_source = self.take_expression_until(b';')?.to_owned();
+            let mut expression = self.compile_expression(&expression_source)?;
+            let field_type = self.storage[field].value_type;
+            coerce_expression(&mut expression, field_type).map_err(|_| {
+                format!(
+                    "storage field '{field_name}' has type {}, expression has type {}",
+                    field_type.name(),
+                    expression.1.name()
+                )
+            })?;
+            return Ok(Statement::Store {
+                field: field as u16,
+                expression: expression.0,
+            });
         }
-        Ok(Statement::Store {
-            field: field as u16,
-            expression,
+        let map = self
+            .maps
+            .iter()
+            .position(|candidate| candidate.name == field_name)
+            .ok_or_else(|| format!("unknown storage field '{field_name}'"))?;
+        let definition = &self.maps[map];
+        let mut keys = Vec::with_capacity(definition.key_types.len());
+        for key_type in &definition.key_types {
+            self.skip_whitespace();
+            self.expect_byte(b'[', "expected '[' before map key")?;
+            let key_source = self.take_expression_until(b']')?.to_owned();
+            let mut key = self.compile_expression(&key_source)?;
+            coerce_expression(&mut key, *key_type).map_err(|_| {
+                format!(
+                    "map '{field_name}' key has type {}, expected {}",
+                    key.1.name(),
+                    key_type.name()
+                )
+            })?;
+            keys.push(key.0);
+        }
+        self.skip_whitespace();
+        if self.peek_byte() == Some(b'[') {
+            return Err(format!("map '{field_name}' received too many keys"));
+        }
+        self.expect_byte(b'=', "expected '=' in map assignment")?;
+        let expression_source = self.take_expression_until(b';')?.to_owned();
+        let mut expression = self.compile_expression(&expression_source)?;
+        coerce_expression(&mut expression, definition.value_type).map_err(|_| {
+            format!(
+                "map '{field_name}' has value type {}, expression has type {}",
+                definition.value_type.name(),
+                expression.1.name()
+            )
+        })?;
+        Ok(Statement::MapStore {
+            map: map as u16,
+            keys,
+            expression: expression.0,
         })
     }
 
@@ -637,18 +937,22 @@ impl BodyParser<'_> {
         }
 
         let inherited_local_count = self.local_names.len();
-        let then_branch = self.parse_block(true, depth + 1, true)?;
+        let then_branch = nonempty_branch(self.parse_block(true, depth + 1, false)?);
         self.local_names.truncate(inherited_local_count);
         self.local_types.truncate(inherited_local_count);
         self.local_mutability.truncate(inherited_local_count);
 
         self.skip_whitespace();
         if !self.consume_keyword("else") {
-            return Err("if statement requires an else branch".to_string());
+            return Ok(Statement::If {
+                condition,
+                then_branch,
+                else_branch: nonempty_branch(Vec::new()),
+            });
         }
         self.skip_whitespace();
         self.expect_byte(b'{', "expected '{' after else")?;
-        let else_branch = self.parse_block(true, depth + 1, true)?;
+        let else_branch = nonempty_branch(self.parse_block(true, depth + 1, false)?);
         self.local_names.truncate(inherited_local_count);
         self.local_types.truncate(inherited_local_count);
         self.local_mutability.truncate(inherited_local_count);
@@ -683,8 +987,11 @@ impl BodyParser<'_> {
             self.parameter_types,
             &self.local_names,
             &self.local_types,
-            self.constants,
-            self.storage,
+            ExpressionEnvironment {
+                constants: self.constants,
+                storage: self.storage,
+                maps: self.maps,
+            },
         )?
         .parse()
     }
@@ -792,6 +1099,7 @@ fn parse_return(
     parameter_types: &[ValueType],
     constants: &[CompiledConstant],
     storage: &[StorageField],
+    maps: &[MapField],
 ) -> Result<ReturnValue, String> {
     let body = function.body_src.trim();
     let value = body
@@ -841,8 +1149,11 @@ fn parse_return(
         parameter_types,
         &[],
         &[],
-        constants,
-        storage,
+        ExpressionEnvironment {
+            constants,
+            storage,
+            maps,
+        },
     )?
     .parse()?;
     if expression_type != return_type {
@@ -857,6 +1168,12 @@ fn parse_return(
 
 fn parse_constant(value: &str, value_type: ValueType) -> Result<[u8; 32], String> {
     match value_type {
+        ValueType::Bytes => {
+            Err("bytes literals are unsupported; pass a bytes parameter".to_string())
+        }
+        ValueType::String => {
+            Err("string literals are not yet supported; pass a string parameter".to_string())
+        }
         ValueType::Bool => match value {
             "true" => Ok(word_from_u64(1)),
             "false" => Ok([0; 32]),
@@ -943,12 +1260,16 @@ enum ExprToken {
     Bool(bool),
     LParen,
     RParen,
+    LBracket,
+    RBracket,
+    Comma,
     Plus,
     Minus,
     Star,
     Slash,
     EqEq,
     Lt,
+    Gte,
     Eof,
 }
 
@@ -960,8 +1281,14 @@ struct ExpressionParser<'a> {
     parameter_types: &'a [ValueType],
     local_names: &'a [String],
     local_types: &'a [ValueType],
+    environment: ExpressionEnvironment<'a>,
+}
+
+#[derive(Clone, Copy)]
+struct ExpressionEnvironment<'a> {
     constants: &'a [CompiledConstant],
     storage: &'a [StorageField],
+    maps: &'a [MapField],
 }
 
 impl<'a> ExpressionParser<'a> {
@@ -971,8 +1298,7 @@ impl<'a> ExpressionParser<'a> {
         parameter_types: &'a [ValueType],
         local_names: &'a [String],
         local_types: &'a [ValueType],
-        constants: &'a [CompiledConstant],
-        storage: &'a [StorageField],
+        environment: ExpressionEnvironment<'a>,
     ) -> Result<Self, String> {
         Ok(Self {
             tokens: lex_expression(source)?,
@@ -982,8 +1308,7 @@ impl<'a> ExpressionParser<'a> {
             parameter_types,
             local_names,
             local_types,
-            constants,
-            storage,
+            environment,
         })
     }
 
@@ -1011,12 +1336,30 @@ impl<'a> ExpressionParser<'a> {
 
     fn parse_comparison(&mut self) -> Result<(Vec<Instruction>, ValueType), String> {
         let mut left = self.parse_additive()?;
-        while self.eat(&ExprToken::Lt) {
+        loop {
+            let gte = if self.eat(&ExprToken::Gte) {
+                true
+            } else if self.eat(&ExprToken::Lt) {
+                false
+            } else {
+                break;
+            };
             let right = self.parse_additive()?;
-            require_u64_pair(left.1, right.1, "comparison")?;
-            left.0.extend(right.0);
-            left.0.push(Instruction::LtU64);
-            left.1 = ValueType::Bool;
+            if gte {
+                let (mut left_code, mut right_code, value_type) =
+                    coerce_numeric_pair(left, right, "comparison")?;
+                if value_type != ValueType::U256 {
+                    return Err("'>=' currently requires u256 operands".to_string());
+                }
+                left_code.append(&mut right_code);
+                left_code.push(Instruction::GteU256);
+                left = (left_code, ValueType::Bool);
+            } else {
+                require_u64_pair(left.1, right.1, "comparison")?;
+                left.0.extend(right.0);
+                left.0.push(Instruction::LtU64);
+                left.1 = ValueType::Bool;
+            }
         }
         Ok(left)
     }
@@ -1024,21 +1367,28 @@ impl<'a> ExpressionParser<'a> {
     fn parse_additive(&mut self) -> Result<(Vec<Instruction>, ValueType), String> {
         let mut left = self.parse_multiplicative()?;
         loop {
-            let instruction = if self.eat(&ExprToken::Plus) {
-                Some(Instruction::AddU64)
+            let add = if self.eat(&ExprToken::Plus) {
+                Some(true)
             } else if self.eat(&ExprToken::Minus) {
-                Some(Instruction::SubU64)
+                Some(false)
             } else {
                 None
             };
-            let Some(instruction) = instruction else {
+            let Some(add) = add else {
                 break;
             };
             let right = self.parse_multiplicative()?;
-            require_u64_pair(left.1, right.1, "arithmetic")?;
-            left.0.extend(right.0);
-            left.0.push(instruction);
-            left.1 = ValueType::U64;
+            let (mut left_code, mut right_code, value_type) =
+                coerce_numeric_pair(left, right, "arithmetic")?;
+            left_code.append(&mut right_code);
+            left_code.push(match (value_type, add) {
+                (ValueType::U64, true) => Instruction::AddU64,
+                (ValueType::U64, false) => Instruction::SubU64,
+                (ValueType::U256, true) => Instruction::AddU256,
+                (ValueType::U256, false) => Instruction::SubU256,
+                _ => unreachable!(),
+            });
+            left = (left_code, value_type);
         }
         Ok(left)
     }
@@ -1084,26 +1434,98 @@ impl<'a> ExpressionParser<'a> {
                 ValueType::Bool,
             )),
             ExprToken::Ident(name) => {
+                if let Some((instruction, expected, result)) =
+                    intrinsic(&name).filter(|_| self.current() == &ExprToken::LParen)
+                {
+                    if !self.eat(&ExprToken::LParen) {
+                        return Err(format!("{name} requires parentheses"));
+                    }
+                    if self.depth >= MAX_EXPRESSION_DEPTH {
+                        return Err(format!("return expression exceeds maximum nesting depth {MAX_EXPRESSION_DEPTH}"));
+                    }
+                    self.depth += 1;
+                    let mut code = Vec::new();
+                    for (index, expected_type) in expected.iter().enumerate() {
+                        if index > 0 && !self.eat(&ExprToken::Comma) {
+                            return Err(format!(
+                                "{name} requires exactly {} arguments",
+                                expected.len()
+                            ));
+                        }
+                        let (argument, ty) = self.parse_equality()?;
+                        if name == "word_bytes" {
+                            if matches!(ty, ValueType::String | ValueType::Bytes) {
+                                return Err("word_bytes requires a scalar word".into());
+                            }
+                        } else if ty != *expected_type {
+                            return Err(format!(
+                                "{name} argument {} requires {}, found {}",
+                                index + 1,
+                                expected_type.name(),
+                                ty.name()
+                            ));
+                        }
+                        code.extend(argument);
+                    }
+                    self.depth -= 1;
+                    if !self.eat(&ExprToken::RParen) {
+                        return Err(format!(
+                            "{name} requires exactly {} arguments",
+                            expected.len()
+                        ));
+                    }
+                    code.push(instruction);
+                    return Ok((code, result));
+                }
                 if let Some((instruction, value_type)) = match name.as_str() {
                     "msg.sender" => Some((Instruction::MessageSender, ValueType::Address)),
                     "msg.value" => Some((Instruction::MessageValue, ValueType::U256)),
                     "block.height" => Some((Instruction::BlockHeight, ValueType::U64)),
                     "block.timestamp" => Some((Instruction::BlockTimestamp, ValueType::U64)),
                     "chain.id" => Some((Instruction::ChainId, ValueType::U64)),
+                    "contract.address" => Some((Instruction::ContractAddress, ValueType::Address)),
                     _ => None,
                 } {
                     return Ok((vec![instruction], value_type));
                 }
                 if let Some(field_name) = name.strip_prefix("self.") {
-                    let index = self
+                    if let Some(index) = self
+                        .environment
                         .storage
                         .iter()
                         .position(|field| field.name == field_name)
-                        .ok_or_else(|| format!("unknown storage field '{field_name}'"))?;
-                    return Ok((
-                        vec![Instruction::Storage(index as u16)],
-                        self.storage[index].value_type,
-                    ));
+                    {
+                        return Ok((
+                            vec![Instruction::Storage(index as u16)],
+                            self.environment.storage[index].value_type,
+                        ));
+                    }
+                    if let Some(index) = self
+                        .environment
+                        .maps
+                        .iter()
+                        .position(|map| map.name == field_name)
+                    {
+                        let map = &self.environment.maps[index];
+                        let mut instructions = Vec::new();
+                        for key_type in &map.key_types {
+                            if !self.eat(&ExprToken::LBracket) {
+                                return Err(format!("map '{field_name}' requires a key"));
+                            }
+                            let mut key = self.parse_equality()?;
+                            if !self.eat(&ExprToken::RBracket) {
+                                return Err("expected ']' after map key".to_string());
+                            }
+                            coerce_expression(&mut key, *key_type)?;
+                            instructions.extend(key.0);
+                        }
+                        if self.current() == &ExprToken::LBracket {
+                            return Err(format!("map '{field_name}' received too many keys"));
+                        }
+                        instructions.push(Instruction::MapStorage(index as u16));
+                        return Ok((instructions, map.value_type));
+                    }
+                    return Err(format!("unknown storage field '{field_name}'"));
                 }
                 if let Some(index) = self
                     .parameter_names
@@ -1121,7 +1543,12 @@ impl<'a> ExpressionParser<'a> {
                         self.local_types[index],
                     ));
                 }
-                if let Some(constant) = self.constants.iter().find(|value| value.name == name) {
+                if let Some(constant) = self
+                    .environment
+                    .constants
+                    .iter()
+                    .find(|value| value.name == name)
+                {
                     return Ok((
                         vec![Instruction::Constant(constant.value_type, constant.word)],
                         constant.value_type,
@@ -1173,11 +1600,108 @@ const MAX_EXPRESSION_SOURCE_BYTES: usize = 65_536;
 const MAX_EXPRESSION_TOKENS: usize = 4_096;
 const MAX_EXPRESSION_DEPTH: usize = 128;
 
+fn intrinsic(name: &str) -> Option<(Instruction, &'static [ValueType], ValueType)> {
+    use ValueType::*;
+    Some(match name {
+        "keccak256" => (Instruction::Keccak256, &[Bytes], Bytes32),
+        "bytes_len" => (Instruction::BytesLen, &[Bytes], U64),
+        "bytes_concat" => (Instruction::BytesConcat, &[Bytes, Bytes], Bytes),
+        "bytes_slice" => (Instruction::BytesSlice, &[Bytes, U64, U64], Bytes),
+        "bytes_get" => (Instruction::BytesGet, &[Bytes, U64], U64),
+        // The argument is polymorphic over the validated scalar word types.
+        "word_bytes" => (Instruction::WordBytes, &[Bytes32], Bytes),
+        "bytes_word" => (Instruction::BytesWord, &[Bytes], Bytes32),
+        "word_address" => (Instruction::WordAddress, &[Bytes32], Address),
+        "word_u64" => (Instruction::WordU64, &[Bytes32], U64),
+        "word_u256" => (Instruction::WordU256, &[Bytes32], U256),
+        "secp256k1_verify" => (
+            Instruction::Secp256k1Verify,
+            &[Bytes32, Bytes, Address],
+            Bool,
+        ),
+        _ => return None,
+    })
+}
+
+fn split_arguments(source: &str) -> Result<Vec<&str>, String> {
+    let mut stack = Vec::new();
+    let mut parts = Vec::new();
+    let mut start = 0;
+    for (offset, byte) in source.bytes().enumerate() {
+        match byte {
+            b'(' | b'[' => stack.push(byte),
+            b')' | b']' => {
+                if stack.pop() != Some(if byte == b')' { b'(' } else { b'[' }) {
+                    return Err("unbalanced host argument delimiters".into());
+                }
+            }
+            b',' if stack.is_empty() => {
+                parts.push(&source[start..offset]);
+                start = offset + 1;
+            }
+            _ => {}
+        }
+    }
+    if !stack.is_empty() {
+        return Err("unbalanced host argument delimiters".into());
+    }
+    parts.push(&source[start..]);
+    Ok(parts)
+}
+
 fn require_u64_pair(left: ValueType, right: ValueType, operation: &str) -> Result<(), String> {
     if left != ValueType::U64 || right != ValueType::U64 {
         return Err(format!("{operation} currently requires two u64 operands"));
     }
     Ok(())
+}
+
+fn coerce_expression(
+    expression: &mut (Vec<Instruction>, ValueType),
+    expected: ValueType,
+) -> Result<(), String> {
+    if expression.1 == expected {
+        return Ok(());
+    }
+    if expected == ValueType::U256
+        && expression.1 == ValueType::U64
+        && matches!(
+            expression.0.as_slice(),
+            [Instruction::Constant(ValueType::U64, _)]
+        )
+    {
+        if let Instruction::Constant(value_type, _) = &mut expression.0[0] {
+            *value_type = ValueType::U256;
+        }
+        expression.1 = ValueType::U256;
+        return Ok(());
+    }
+    Err(format!(
+        "expression has type {}, expected {}",
+        expression.1.name(),
+        expected.name()
+    ))
+}
+
+fn coerce_numeric_pair(
+    mut left: (Vec<Instruction>, ValueType),
+    mut right: (Vec<Instruction>, ValueType),
+    operation: &str,
+) -> Result<(Vec<Instruction>, Vec<Instruction>, ValueType), String> {
+    if left.1 == right.1 && matches!(left.1, ValueType::U64 | ValueType::U256) {
+        return Ok((left.0, right.0, left.1));
+    }
+    if left.1 == ValueType::U256 {
+        coerce_expression(&mut right, ValueType::U256)?;
+        return Ok((left.0, right.0, ValueType::U256));
+    }
+    if right.1 == ValueType::U256 {
+        coerce_expression(&mut left, ValueType::U256)?;
+        return Ok((left.0, right.0, ValueType::U256));
+    }
+    Err(format!(
+        "{operation} requires matching u64 or u256 operands"
+    ))
 }
 
 fn lex_expression(source: &str) -> Result<Vec<ExprToken>, String> {
@@ -1238,11 +1762,18 @@ fn lex_expression(source: &str) -> Result<Vec<ExprToken>, String> {
         let token = match byte {
             b'(' => ExprToken::LParen,
             b')' => ExprToken::RParen,
+            b'[' => ExprToken::LBracket,
+            b']' => ExprToken::RBracket,
+            b',' => ExprToken::Comma,
             b'+' => ExprToken::Plus,
             b'-' => ExprToken::Minus,
             b'*' => ExprToken::Star,
             b'/' => ExprToken::Slash,
             b'<' => ExprToken::Lt,
+            b'>' if bytes.get(position + 1) == Some(&b'=') => {
+                position += 1;
+                ExprToken::Gte
+            }
             b'=' if bytes.get(position + 1) == Some(&b'=') => {
                 position += 1;
                 ExprToken::EqEq
@@ -1301,11 +1832,38 @@ mod tests {
     }
 
     #[test]
+    fn artifact_exposes_canonical_verification_metadata() {
+        let source =
+            "contract C { pub fn transfer(to: address, amount: u256) -> bool { return true; } }";
+        let artifact = compile(source).unwrap();
+
+        assert_eq!(artifact.artifact_version, 1);
+        assert_eq!(artifact.compiler, "lithc");
+        assert_eq!(artifact.compiler_version, "0.2.0");
+        assert_eq!(
+            artifact.source_hash,
+            "0x32ad261ca2d8fa0510478c6d4559a9f8416cc38960a48dc78b7d91c72f6fcc73"
+        );
+        assert_eq!(
+            artifact.code_hash,
+            "0xe73e57c4e59ec327bccb0480e3d1eaefb3403e207c740c1a388745a10bb2fb91"
+        );
+        assert_eq!(artifact.entrypoints.len(), 1);
+        assert_eq!(artifact.entrypoints[0].name, "transfer");
+        assert_eq!(artifact.entrypoints[0].signature, "transfer(address,u256)");
+        assert_eq!(
+            artifact.entrypoints[0].selector,
+            "0xf61367304e4e32065cad538b10a44bb599f78e0771530108572d225c74122c1f"
+        );
+        assert_eq!(compile(source).unwrap(), artifact);
+    }
+
+    #[test]
     fn output_is_deterministic_and_fail_closed() {
         let source = "contract C { pub fn answer() -> u64 { return 42; } }";
         assert_eq!(compile(source).unwrap(), compile(source).unwrap());
         for unsupported in [
-            "contract C { state { values: map<address, u64>; } pub fn x() -> u64 { return 1; } }",
+            "contract C { state { values: vec<u64>; } pub fn x() -> u64 { return 1; } }",
             "contract C { event Seen { values: map<address, u64> } pub fn x() -> u64 { return 1; } }",
             "contract C { pub fn x() -> u64 { return call(); } }",
             "contract C { pub async fn x() -> u64 { return 1; } }",
@@ -1340,7 +1898,7 @@ mod tests {
             compile("contract C { pub fn bad(flag: bool) -> u64 { return flag + 1; } }")
                 .unwrap_err()
                 .to_string()
-                .contains("requires two u64 operands")
+                .contains("requires matching u64 or u256 operands")
         );
         assert!(
             compile("contract C { pub fn bad(value: u64) -> bool { return value + 1; } }")
@@ -1392,8 +1950,8 @@ mod tests {
             "contract C { pub fn choose(value: u64, limit: u64) -> u64 { let doubled: u64 = value * 2; if doubled < limit { return doubled; } else { let fallback = limit + 1; return fallback; } } }",
         )
         .unwrap();
-        assert_eq!(artifact.target, "lithovm-native-v9");
-        assert_eq!(artifact.bytecode_version, 9);
+        assert_eq!(artifact.target, "lithovm-native-v11");
+        assert_eq!(artifact.bytecode_version, 11);
         let bytes = hex::decode(&artifact.bytecode[2..]).unwrap();
         let vm = Vm::default();
 
@@ -1443,7 +2001,7 @@ mod tests {
             ),
             (
                 "contract C { pub fn x(value: u64) -> u64 { if value < 1 { return 1; } } }",
-                "requires an else branch",
+                "function does not return on every path",
             ),
             (
                 "contract C { pub fn x(value: u64) -> u64 { if value { return 1; } else { return 2; } } }",
@@ -1519,6 +2077,33 @@ mod tests {
     }
 
     #[test]
+    fn typed_map_access_fails_closed() {
+        for (source, expected) in [
+            (
+                "contract C { state { balances: map<address, u256>; } pub fn x() -> u256 { return self.balances[1]; } }",
+                "expression has type u64, expected address",
+            ),
+            (
+                "contract C { state { allowances: map<address, map<address, u256>>; } pub fn x(owner: address) -> u256 { return self.allowances[owner]; } }",
+                "map 'allowances' requires a key",
+            ),
+            (
+                "contract C { state { balances: map<address, u256>; } pub fn x(a: address, b: address) -> u256 { return self.balances[a][b]; } }",
+                "map 'balances' received too many keys",
+            ),
+            (
+                "contract C { state { balances: map<address, u256>; } pub fn x(a: address) -> bool { self.balances[a] = true; return true; } }",
+                "map 'balances' has value type u256, expression has type bool",
+            ),
+        ] {
+            assert!(
+                compile(source).unwrap_err().to_string().contains(expected),
+                "missing '{expected}' for {source}"
+            );
+        }
+    }
+
+    #[test]
     fn compiles_and_executes_explicit_host_context() {
         let artifact = compile(
             "contract Context { pub fn sender() -> address { return msg.sender; } pub fn value() -> u256 { return msg.value; } pub fn height() -> u64 { return block.height; } pub fn timestamp() -> u64 { return block.timestamp; } pub fn chain() -> u64 { return chain.id; } }",
@@ -1530,6 +2115,8 @@ mod tests {
         let context = ExecutionContext {
             caller,
             value: word_from_u64(25),
+            read_only: false,
+            contract: [0; 32],
             block_height: 91,
             block_timestamp: 1_725_000_000,
             chain_id: 9005,
@@ -1957,6 +2544,297 @@ mod tests {
             (
                 "contract C { const FLAG: bool = true; pub fn x() -> u64 { return FLAG; } }",
                 "constant 'FLAG' has type bool, expected u64",
+            ),
+        ] {
+            assert!(
+                compile(source).unwrap_err().to_string().contains(expected),
+                "missing '{expected}' for {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_failures_roll_back_all_effects_and_allow_recovery() {
+        let artifact = compile(
+            "contract Guarded { state { value: u64; } event Changed { value: u64 } pub fn update(allowed: bool, recipient: address, target: address, selector: bytes32, amount: u256) -> u64 { self.value = 7; emit Changed { value: self.value }; transfer_native(recipient, amount); call_contract(target, selector, amount); require(allowed); return self.value; } pub fn abort() -> u64 { self.value = 9; revert(); } }",
+        )
+        .unwrap();
+        assert_eq!(artifact.target, "lithovm-native-v11");
+        assert_eq!(artifact.bytecode_version, 11);
+        let bytes = hex::decode(&artifact.bytecode[2..]).unwrap();
+        let mut account = [0; 32];
+        account[12..].copy_from_slice(&[3; 20]);
+        let selector = [7; 32];
+        let context = ExecutionContext {
+            contract_balance: word_from_u64(100),
+            chain_id: 700777,
+            ..ExecutionContext::default()
+        };
+        let vm = Vm::default();
+        let mut storage = Storage::default();
+        storage.set_word("value", word_from_u64(3));
+
+        let denied = vm
+            .execute_with_storage_and_context(
+                &bytes,
+                "update",
+                &[
+                    word_from_bool(false),
+                    account,
+                    account,
+                    selector,
+                    word_from_u64(10),
+                ],
+                500,
+                &mut storage,
+                &context,
+            )
+            .unwrap_err();
+        assert!(denied.to_string().contains("require condition failed"));
+        assert_eq!(storage.get("value"), Some(&word_from_u64(3)));
+
+        let reverted = vm
+            .execute_with_storage_and_context(&bytes, "abort", &[], 100, &mut storage, &context)
+            .unwrap_err();
+        assert!(reverted.to_string().contains("execution reverted"));
+        assert_eq!(storage.get("value"), Some(&word_from_u64(3)));
+
+        let recovered = vm
+            .execute_with_storage_and_context(
+                &bytes,
+                "update",
+                &[
+                    word_from_bool(true),
+                    account,
+                    account,
+                    selector,
+                    word_from_u64(10),
+                ],
+                500,
+                &mut storage,
+                &context,
+            )
+            .unwrap();
+        assert_eq!(recovered.return_value, word_from_u64(7));
+        assert_eq!(recovered.events.len(), 1);
+        assert_eq!(recovered.transfers.len(), 1);
+        assert_eq!(recovered.calls.len(), 1);
+        assert_eq!(storage.get("value"), Some(&word_from_u64(7)));
+    }
+
+    #[test]
+    fn lax_lep100_candidate_executes_balances_allowances_and_rollback() {
+        let source = include_str!("../../../../sdk/contracts/standards/lax_lep100_v11.lithic");
+        let artifact = compile(source).unwrap();
+        assert_eq!(artifact.target, "lithovm-native-v11");
+        assert_eq!(artifact.bytecode_version, 11);
+        let bytes = hex::decode(&artifact.bytecode[2..]).unwrap();
+        let vm = Vm::default();
+        let mut storage = Storage::default();
+        let mut owner = [0; 32];
+        owner[12..].copy_from_slice(&[1; 20]);
+        let mut recipient = [0; 32];
+        recipient[12..].copy_from_slice(&[2; 20]);
+        let mut spender = [0; 32];
+        spender[12..].copy_from_slice(&[3; 20]);
+        let supply = parse_u256_decimal("10000000000000000000000000000").unwrap();
+
+        let owner_context = ExecutionContext {
+            caller: owner,
+            chain_id: 700_777,
+            ..ExecutionContext::default()
+        };
+        let initialized = vm
+            .execute_with_storage_and_context(
+                &bytes,
+                "initialize",
+                &[owner],
+                1_000,
+                &mut storage,
+                &owner_context,
+            )
+            .unwrap();
+        assert_eq!(initialized.events.len(), 1);
+        assert_eq!(storage.get("total_supply"), Some(&supply));
+        assert_eq!(storage.get_map("balances", &[owner]), Some(&supply));
+        assert_eq!(
+            vm.execute_with_storage(&bytes, "name", &[], 100, &mut storage)
+                .unwrap()
+                .return_value,
+            parse_fixed_hex(
+                "0x4c6974686f73706865726520416c676f726974686d6963000000000000000000",
+                32,
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            vm.execute_with_storage(&bytes, "symbol", &[], 100, &mut storage)
+                .unwrap()
+                .return_value,
+            parse_fixed_hex(
+                "0x4c41580000000000000000000000000000000000000000000000000000000000",
+                32,
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            vm.execute_with_storage(&bytes, "decimals", &[], 100, &mut storage)
+                .unwrap()
+                .return_value,
+            word_from_u64(18)
+        );
+
+        vm.execute_with_storage_and_context(
+            &bytes,
+            "transfer",
+            &[recipient, word_from_u64(100)],
+            1_000,
+            &mut storage,
+            &owner_context,
+        )
+        .unwrap();
+        vm.execute_with_storage_and_context(
+            &bytes,
+            "approve",
+            &[spender, word_from_u64(50)],
+            1_000,
+            &mut storage,
+            &owner_context,
+        )
+        .unwrap();
+        let spender_context = ExecutionContext {
+            caller: spender,
+            chain_id: 700_777,
+            ..ExecutionContext::default()
+        };
+        vm.execute_with_storage_and_context(
+            &bytes,
+            "transfer_from",
+            &[owner, recipient, word_from_u64(40)],
+            1_000,
+            &mut storage,
+            &spender_context,
+        )
+        .unwrap();
+        assert_eq!(
+            storage.get_map("allowances", &[owner, spender]),
+            Some(&word_from_u64(10))
+        );
+        assert_eq!(
+            storage.get_map("balances", &[recipient]),
+            Some(&word_from_u64(140))
+        );
+        let recipient_context = ExecutionContext {
+            caller: recipient,
+            chain_id: 700_777,
+            ..ExecutionContext::default()
+        };
+        vm.execute_with_storage_and_context(
+            &bytes,
+            "burn",
+            &[word_from_u64(40)],
+            1_000,
+            &mut storage,
+            &recipient_context,
+        )
+        .unwrap();
+        assert_eq!(
+            storage.get_map("balances", &[recipient]),
+            Some(&word_from_u64(100))
+        );
+        assert_eq!(
+            storage.get("total_supply"),
+            Some(&parse_u256_decimal("9999999999999999999999999960").unwrap())
+        );
+
+        let before_failure = storage.clone();
+        let failure = vm.execute_transactionally(
+            &bytes,
+            "transfer",
+            &[recipient, supply],
+            1_000,
+            &mut storage,
+            &owner_context,
+        );
+        assert!(matches!(
+            failure,
+            lithovm::ExecutionOutcome::Failure(lithovm::ExecutionFailure {
+                kind: lithovm::FailureKind::Revert,
+                ..
+            })
+        ));
+        assert_eq!(storage, before_failure);
+
+        let second_initialize = vm.execute_transactionally(
+            &bytes,
+            "initialize",
+            &[recipient],
+            1_000,
+            &mut storage,
+            &owner_context,
+        );
+        assert!(matches!(
+            second_initialize,
+            lithovm::ExecutionOutcome::Failure(lithovm::ExecutionFailure {
+                kind: lithovm::FailureKind::Revert,
+                ..
+            })
+        ));
+        assert_eq!(storage, before_failure);
+
+        let before_out_of_gas = storage.clone();
+        let out_of_gas = vm.execute_transactionally(
+            &bytes,
+            "transfer",
+            &[recipient, word_from_u64(1)],
+            50,
+            &mut storage,
+            &owner_context,
+        );
+        assert!(matches!(
+            out_of_gas,
+            lithovm::ExecutionOutcome::Failure(lithovm::ExecutionFailure {
+                kind: lithovm::FailureKind::OutOfGas,
+                gas_used: 50,
+                ..
+            })
+        ));
+        assert_eq!(storage, before_out_of_gas);
+
+        storage.set_map_word("balances", vec![recipient], [0xff; 32]);
+        let before_overflow = storage.clone();
+        let overflow = vm.execute_transactionally(
+            &bytes,
+            "transfer",
+            &[recipient, word_from_u64(1)],
+            1_000,
+            &mut storage,
+            &owner_context,
+        );
+        assert!(matches!(
+            overflow,
+            lithovm::ExecutionOutcome::Failure(lithovm::ExecutionFailure {
+                kind: lithovm::FailureKind::Trap,
+                ..
+            })
+        ));
+        assert_eq!(storage, before_overflow);
+    }
+
+    #[test]
+    fn failure_syntax_and_types_fail_closed() {
+        for (source, expected) in [
+            (
+                "contract C { pub fn x(value: u64) -> u64 { require(value); return value; } }",
+                "require condition has type u64",
+            ),
+            (
+                "contract C { pub fn x() -> u64 { revert(1); } }",
+                "revert does not accept arguments",
+            ),
+            (
+                "contract C { pub fn x() -> u64 { revert(); return 1; } }",
+                "unreachable statement",
             ),
         ] {
             assert!(

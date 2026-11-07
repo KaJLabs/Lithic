@@ -1,0 +1,6 @@
+contract Factory {
+    pub fn create(template: address, salt: bytes32, initializer: bytes32, name: string) -> address {
+        let child: address = create_contract(template, salt, initializer, 0, name);
+        return child;
+    }
+}

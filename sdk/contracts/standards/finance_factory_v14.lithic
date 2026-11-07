@@ -1,0 +1,27 @@
+contract FinanceFactory {
+    state {
+        initialized: bool;
+        template: address;
+        initializer: bytes32;
+        created: u64;
+    }
+    event TokenCreated { token: address, creator: address, name: string, symbol: string }
+
+    pub fn initialize(template: address, initializer: bytes32) -> bool {
+        require(self.initialized == false);
+        self.template = template;
+        self.initializer = initializer;
+        self.initialized = true;
+        return true;
+    }
+
+    pub fn create(salt: bytes32, name: string, symbol: string, decimals: u64, supply: u256, mintable: bool, burnable: bool, pausable: bool, ownership: bool) -> address {
+        require(self.initialized);
+        let token: address = create_contract(self.template, salt, self.initializer, 0, name, symbol, msg.sender, decimals, supply, mintable, burnable, pausable, ownership);
+        self.created = self.created + 1;
+        emit TokenCreated { token: token, creator: msg.sender, name: name, symbol: symbol };
+        return token;
+    }
+
+    pub fn created() -> u64 { return self.created; }
+}

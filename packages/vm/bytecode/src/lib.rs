@@ -1,4 +1,8 @@
 use anyhow::{anyhow, bail, Result};
+use sha3::{Digest, Keccak256};
+#[cfg(test)]
+mod compact_tests;
+pub mod values;
 
 pub const MAGIC: &[u8; 7] = b"LITHOVM";
 pub const LEGACY_VERSION: u8 = 1;
@@ -9,7 +13,19 @@ pub const EVENT_VERSION: u8 = 5;
 pub const TRANSFER_VERSION: u8 = 6;
 pub const CALL_VERSION: u8 = 7;
 pub const MUTABLE_VERSION: u8 = 8;
-pub const VERSION: u8 = 9;
+pub const REPEAT_VERSION: u8 = 9;
+pub const FAILURE_VERSION: u8 = 10;
+pub const VERSION: u8 = 11;
+/// Dynamic-value candidate; scalar programs continue to encode as v11.
+pub const STRING_VERSION: u8 = 12;
+pub const SYNC_VERSION: u8 = 13;
+pub const CREATE_VERSION: u8 = 14;
+/// Binary values and runtime hashing; not accepted by the v14 chain profile.
+pub const BYTES_VERSION: u8 = 15;
+/// Bounded byte manipulation, strict signature verification and self identity.
+pub const ACCOUNT_PRIMITIVES_VERSION: u8 = 16;
+/// Compact scalar constants; an opt-in development format, not a chain profile.
+pub const COMPACT_CONSTANT_VERSION: u8 = 17;
 pub const MAX_FUNCTIONS: usize = 1024;
 pub const MAX_PARAMETERS: usize = 64;
 pub const MAX_NAME_BYTES: usize = 255;
@@ -28,6 +44,8 @@ pub enum ValueType {
     Bool = 3,
     Address = 4,
     Bytes32 = 5,
+    String = 6,
+    Bytes = 7,
 }
 
 impl ValueType {
@@ -38,6 +56,8 @@ impl ValueType {
             3 => Ok(Self::Bool),
             4 => Ok(Self::Address),
             5 => Ok(Self::Bytes32),
+            6 => Ok(Self::String),
+            7 => Ok(Self::Bytes),
             _ => bail!("unknown LithoVM value type {value}"),
         }
     }
@@ -49,6 +69,8 @@ impl ValueType {
             Self::Bool => "bool",
             Self::Address => "address",
             Self::Bytes32 => "bytes32",
+            Self::String => "string",
+            Self::Bytes => "bytes",
         }
     }
 }
@@ -63,6 +85,26 @@ pub enum ReturnValue {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Statement {
+    PayloadInvoke {
+        read_only: bool,
+        target: Vec<Instruction>,
+        value: Vec<Instruction>,
+        payload: Vec<Instruction>,
+    },
+    Create {
+        template: Vec<Instruction>,
+        salt: Vec<Instruction>,
+        initializer: Vec<Instruction>,
+        value: Vec<Instruction>,
+        arguments: Vec<(ValueType, Vec<Instruction>)>,
+    },
+    Invoke {
+        return_type: ValueType,
+        target: Vec<Instruction>,
+        selector: Vec<Instruction>,
+        value: Vec<Instruction>,
+        arguments: Vec<(ValueType, Vec<Instruction>)>,
+    },
     Let {
         value_type: ValueType,
         expression: Vec<Instruction>,
@@ -79,9 +121,16 @@ pub enum Statement {
         count: Vec<Instruction>,
         body: Vec<Statement>,
     },
+    Require(Vec<Instruction>),
+    Revert,
     Return(Vec<Instruction>),
     Store {
         field: u16,
+        expression: Vec<Instruction>,
+    },
+    MapStore {
+        map: u16,
+        keys: Vec<Vec<Instruction>>,
         expression: Vec<Instruction>,
     },
     Emit {
@@ -107,9 +156,11 @@ pub enum Statement {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Instruction {
     Constant(ValueType, [u8; 32]),
+    CompactConstant(ValueType, [u8; 32]),
     Parameter(u16),
     Local(u16),
     Storage(u16),
+    MapStorage(u16),
     MessageSender,
     MessageValue,
     BlockHeight,
@@ -121,6 +172,42 @@ pub enum Instruction {
     DivU64,
     Eq,
     LtU64,
+    AddU256,
+    SubU256,
+    GteU256,
+    Keccak256,
+    BytesLen,
+    BytesConcat,
+    BytesSlice,
+    BytesGet,
+    WordBytes,
+    BytesWord,
+    WordAddress,
+    WordU64,
+    WordU256,
+    Secp256k1Verify,
+    ContractAddress,
+}
+
+impl Instruction {
+    fn minimum_version(&self) -> u8 {
+        match self {
+            Self::CompactConstant(..) => COMPACT_CONSTANT_VERSION,
+            Self::BytesLen
+            | Self::BytesConcat
+            | Self::BytesSlice
+            | Self::BytesGet
+            | Self::WordBytes
+            | Self::BytesWord
+            | Self::WordAddress
+            | Self::WordU64
+            | Self::WordU256
+            | Self::Secp256k1Verify
+            | Self::ContractAddress => ACCOUNT_PRIMITIVES_VERSION,
+            Self::Keccak256 => BYTES_VERSION,
+            _ => VERSION,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -131,9 +218,32 @@ pub struct Function {
     pub return_value: ReturnValue,
 }
 
+/// Returns the canonical native ABI signature used for call selection.
+pub fn function_signature(function: &Function) -> String {
+    let parameters = function
+        .parameters
+        .iter()
+        .map(|value_type| value_type.name())
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("{}({parameters})", function.name)
+}
+
+/// Returns the full Keccak-256 digest of the canonical native ABI signature.
+pub fn function_selector(function: &Function) -> [u8; 32] {
+    Keccak256::digest(function_signature(function).as_bytes()).into()
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StorageField {
     pub name: String,
+    pub value_type: ValueType,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MapField {
+    pub name: String,
+    pub key_types: Vec<ValueType>,
     pub value_type: ValueType,
 }
 
@@ -146,23 +256,106 @@ pub struct EventDefinition {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Program {
     pub storage: Vec<StorageField>,
+    pub maps: Vec<MapField>,
     pub events: Vec<EventDefinition>,
     pub functions: Vec<Function>,
 }
 
+#[derive(Clone, Copy)]
+struct ValidationSchema<'a> {
+    storage: &'a [StorageField],
+    maps: &'a [MapField],
+    events: &'a [EventDefinition],
+}
+
 impl Program {
+    pub fn bytecode_version(&self) -> u8 {
+        if self.functions.iter().any(|f| match &f.return_value {
+            ReturnValue::Expression(code) => code
+                .iter()
+                .any(|i| i.minimum_version() >= COMPACT_CONSTANT_VERSION),
+            ReturnValue::Statements(body) => requires_version(body, COMPACT_CONSTANT_VERSION),
+            _ => false,
+        }) {
+            return COMPACT_CONSTANT_VERSION;
+        }
+        if self.functions.iter().any(|f| match &f.return_value {
+            ReturnValue::Expression(code) => code
+                .iter()
+                .any(|i| i.minimum_version() >= ACCOUNT_PRIMITIVES_VERSION),
+            ReturnValue::Statements(body) => requires_version(body, ACCOUNT_PRIMITIVES_VERSION),
+            _ => false,
+        }) {
+            return ACCOUNT_PRIMITIVES_VERSION;
+        }
+        if self
+            .events
+            .iter()
+            .any(|e| e.fields.iter().any(|f| f.value_type == ValueType::Bytes))
+            || self.functions.iter().any(|f| {
+                f.return_type == ValueType::Bytes
+                    || f.parameters.contains(&ValueType::Bytes)
+                    || match &f.return_value {
+                        ReturnValue::Expression(code) => code.contains(&Instruction::Keccak256),
+                        ReturnValue::Statements(body) => requires_version(body, BYTES_VERSION),
+                        _ => false,
+                    }
+            })
+        {
+            return BYTES_VERSION;
+        }
+        if self.functions.iter().any(|f| {
+            matches!(&f.return_value,
+            ReturnValue::Statements(body) if contains_creation(body))
+        }) {
+            return CREATE_VERSION;
+        }
+        if self.functions.iter().any(|f| {
+            matches!(&f.return_value,
+            ReturnValue::Statements(body) if contains_statement(body, true))
+        }) {
+            return SYNC_VERSION;
+        }
+        let strings = self
+            .storage
+            .iter()
+            .any(|f| f.value_type == ValueType::String)
+            || self
+                .events
+                .iter()
+                .any(|e| e.fields.iter().any(|f| f.value_type == ValueType::String))
+            || self.functions.iter().any(|f| {
+                f.return_type == ValueType::String || f.parameters.contains(&ValueType::String)
+            });
+        if strings {
+            STRING_VERSION
+        } else {
+            VERSION
+        }
+    }
+
     pub fn encode(&self) -> Result<Vec<u8>> {
         validate_storage(&self.storage)?;
+        validate_maps(&self.maps)?;
+        validate_storage_layout(&self.storage, &self.maps)?;
         validate_events(&self.events)?;
-        validate_functions(&self.functions, &self.storage, &self.events)?;
+        validate_functions(&self.functions, &self.storage, &self.maps, &self.events)?;
+        validate_call_mode(self)?;
         let mut bytes = Vec::new();
         bytes.extend_from_slice(MAGIC);
-        bytes.push(VERSION);
+        bytes.push(self.bytecode_version());
         push_u16(&mut bytes, self.storage.len())?;
         for field in &self.storage {
             push_u16(&mut bytes, field.name.len())?;
             bytes.extend_from_slice(field.name.as_bytes());
             bytes.push(field.value_type as u8);
+        }
+        push_u16(&mut bytes, self.maps.len())?;
+        for map in &self.maps {
+            push_name(&mut bytes, &map.name)?;
+            push_u16(&mut bytes, map.key_types.len())?;
+            bytes.extend(map.key_types.iter().map(|value| *value as u8));
+            bytes.push(map.value_type as u8);
         }
         push_u16(&mut bytes, self.events.len())?;
         for event in &self.events {
@@ -209,7 +402,7 @@ pub fn parse(bytes: &[u8]) -> Result<Program> {
         bail!("invalid LithoVM bytecode magic");
     }
     let version = reader.byte()?;
-    if !(LEGACY_VERSION..=VERSION).contains(&version) {
+    if !(LEGACY_VERSION..=COMPACT_CONSTANT_VERSION).contains(&version) {
         bail!("unsupported LithoVM bytecode version {version}");
     }
     let storage = if version >= STORAGE_VERSION {
@@ -231,6 +424,34 @@ pub fn parse(bytes: &[u8]) -> Result<Program> {
         }
         validate_storage(&fields)?;
         fields
+    } else {
+        Vec::new()
+    };
+    let maps = if version >= VERSION {
+        let map_count = reader.u16()? as usize;
+        if map_count > MAX_STORAGE_FIELDS {
+            bail!("too many LithoVM map fields: {map_count}");
+        }
+        let mut maps = Vec::with_capacity(map_count);
+        for _ in 0..map_count {
+            let name = read_name(&mut reader, "map")?;
+            let key_count = reader.u16()? as usize;
+            if key_count == 0 || key_count > MAX_PARAMETERS {
+                bail!("invalid LithoVM map key count {key_count}");
+            }
+            let mut key_types = Vec::with_capacity(key_count);
+            for _ in 0..key_count {
+                key_types.push(ValueType::from_byte(reader.byte()?)?);
+            }
+            maps.push(MapField {
+                name,
+                key_types,
+                value_type: ValueType::from_byte(reader.byte()?)?,
+            });
+        }
+        validate_maps(&maps)?;
+        validate_storage_layout(&storage, &maps)?;
+        maps
     } else {
         Vec::new()
     };
@@ -259,6 +480,11 @@ pub fn parse(bytes: &[u8]) -> Result<Program> {
         events
     } else {
         Vec::new()
+    };
+    let schema = ValidationSchema {
+        storage: &storage,
+        maps: &maps,
+        events: &events,
     };
     let function_count = reader.u16()? as usize;
     if function_count == 0 || function_count > MAX_FUNCTIONS {
@@ -312,20 +538,13 @@ pub fn parse(bytes: &[u8]) -> Result<Program> {
                 for _ in 0..instruction_count {
                     instructions.push(decode_instruction(&mut reader, version)?);
                 }
-                validate_expression(&instructions, &parameters, &[], &storage, return_type)?;
+                validate_expression(&instructions, &parameters, &[], &schema, return_type)?;
                 ReturnValue::Expression(instructions)
             }
             4 if version >= STATEMENT_VERSION => {
                 let statements = decode_statements(&mut reader, version, 0)?;
-                let terminal = validate_statements(
-                    &statements,
-                    &parameters,
-                    return_type,
-                    &[],
-                    &storage,
-                    &events,
-                    0,
-                )?;
+                let terminal =
+                    validate_statements(&statements, &parameters, return_type, &[], &schema, 0)?;
                 if !terminal {
                     bail!("function does not return on every path");
                 }
@@ -343,16 +562,130 @@ pub fn parse(bytes: &[u8]) -> Result<Program> {
     if reader.position != bytes.len() {
         bail!("trailing bytes after LithoVM program");
     }
-    validate_functions(&functions, &storage, &events)?;
-    Ok(Program {
+    validate_functions(&functions, &storage, &maps, &events)?;
+    let program = Program {
         storage,
+        maps,
         events,
         functions,
+    };
+    let required = program.bytecode_version();
+    if required > VERSION && version < required {
+        bail!("program requires LithoVM v{required}");
+    }
+    validate_call_mode(&program)?;
+    Ok(program)
+}
+
+fn requires_version(body: &[Statement], version: u8) -> bool {
+    let hash = |code: &[Instruction]| code.iter().any(|i| i.minimum_version() >= version);
+    let bytes = |ty: ValueType| version <= BYTES_VERSION && ty == ValueType::Bytes;
+    body.iter().any(|statement| match statement {
+        Statement::PayloadInvoke {
+            target,
+            value,
+            payload,
+            ..
+        } => {
+            version <= ACCOUNT_PRIMITIVES_VERSION
+                || [target, value, payload].iter().any(|c| hash(c))
+        }
+        Statement::Create {
+            template,
+            salt,
+            initializer,
+            value,
+            arguments,
+        } => {
+            [template, salt, initializer, value].iter().any(|c| hash(c))
+                || arguments.iter().any(|(ty, code)| bytes(*ty) || hash(code))
+        }
+        Statement::Invoke {
+            return_type,
+            target,
+            selector,
+            value,
+            arguments,
+        } => {
+            bytes(*return_type)
+                || [target, selector, value].iter().any(|c| hash(c))
+                || arguments.iter().any(|(ty, code)| bytes(*ty) || hash(code))
+        }
+        Statement::Let {
+            value_type,
+            expression,
+        }
+        | Statement::LetMutable {
+            value_type,
+            expression,
+        } => bytes(*value_type) || hash(expression),
+        Statement::SetLocal { expression, .. }
+        | Statement::Store { expression, .. }
+        | Statement::Require(expression)
+        | Statement::Return(expression) => hash(expression),
+        Statement::MapStore {
+            keys, expression, ..
+        } => keys.iter().any(|c| hash(c)) || hash(expression),
+        Statement::Emit { values, .. } => values.iter().any(|c| hash(c)),
+        Statement::Transfer { recipient, amount } => hash(recipient) || hash(amount),
+        Statement::Call {
+            target,
+            selector,
+            value,
+        } => [target, selector, value].iter().any(|c| hash(c)),
+        Statement::Repeat { count, body } => hash(count) || requires_version(body, version),
+        Statement::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            hash(condition)
+                || requires_version(then_branch, version)
+                || requires_version(else_branch, version)
+        }
+        Statement::Revert => false,
     })
+}
+
+fn contains_statement(body: &[Statement], invoke: bool) -> bool {
+    body.iter().any(|statement| match statement {
+        Statement::Invoke { .. } => invoke,
+        Statement::Call { .. } => !invoke,
+        Statement::If {
+            then_branch,
+            else_branch,
+            ..
+        } => contains_statement(then_branch, invoke) || contains_statement(else_branch, invoke),
+        Statement::Repeat { body, .. } => contains_statement(body, invoke),
+        _ => false,
+    })
+}
+
+fn contains_creation(body: &[Statement]) -> bool {
+    body.iter().any(|statement| match statement {
+        Statement::Create { .. } => true,
+        Statement::If {
+            then_branch,
+            else_branch,
+            ..
+        } => contains_creation(then_branch) || contains_creation(else_branch),
+        Statement::Repeat { body, .. } => contains_creation(body),
+        _ => false,
+    })
+}
+
+fn validate_call_mode(program: &Program) -> Result<()> {
+    if program.bytecode_version() >= SYNC_VERSION && program.functions.iter().any(|f|
+        matches!(&f.return_value, ReturnValue::Statements(body) if contains_statement(body, false))) {
+        bail!("cannot mix synchronous effects and deferred call_contract in one program");
+    }
+    Ok(())
 }
 
 pub fn validate_word(value_type: ValueType, word: &[u8; 32]) -> Result<()> {
     match value_type {
+        ValueType::String => bail!("string cannot be represented by a scalar word"),
+        ValueType::Bytes => bail!("bytes cannot be represented by a scalar word"),
         ValueType::U64 if word[..24] != [0; 24] => bail!("non-canonical u64 value"),
         ValueType::Bool if word[..31] != [0; 31] || word[31] > 1 => {
             bail!("non-canonical bool value")
@@ -367,6 +700,9 @@ fn validate_storage(storage: &[StorageField]) -> Result<()> {
         bail!("program exceeds {MAX_STORAGE_FIELDS} storage fields");
     }
     for (index, field) in storage.iter().enumerate() {
+        if field.value_type == ValueType::Bytes {
+            bail!("bytes storage is unsupported");
+        }
         if field.name.is_empty()
             || field.name.len() > MAX_NAME_BYTES
             || !field.name.is_ascii()
@@ -379,6 +715,40 @@ fn validate_storage(storage: &[StorageField]) -> Result<()> {
             .any(|earlier| earlier.name == field.name)
         {
             bail!("duplicate LithoVM storage field name '{}'", field.name);
+        }
+    }
+    Ok(())
+}
+
+fn validate_maps(maps: &[MapField]) -> Result<()> {
+    if maps.len() > MAX_STORAGE_FIELDS {
+        bail!("program exceeds {MAX_STORAGE_FIELDS} map fields");
+    }
+    for (index, map) in maps.iter().enumerate() {
+        if map.value_type == ValueType::String || map.key_types.contains(&ValueType::String) {
+            bail!("string map keys and values are unsupported");
+        }
+        if map.value_type == ValueType::Bytes || map.key_types.contains(&ValueType::Bytes) {
+            bail!("bytes map keys and values are unsupported");
+        }
+        validate_name(&map.name, "map")?;
+        if maps[..index].iter().any(|earlier| earlier.name == map.name) {
+            bail!("duplicate LithoVM map field name '{}'", map.name);
+        }
+        if map.key_types.is_empty() || map.key_types.len() > MAX_PARAMETERS {
+            bail!("map '{}' has an invalid key count", map.name);
+        }
+    }
+    Ok(())
+}
+
+fn validate_storage_layout(storage: &[StorageField], maps: &[MapField]) -> Result<()> {
+    if storage.len().saturating_add(maps.len()) > MAX_STORAGE_FIELDS {
+        bail!("program exceeds {MAX_STORAGE_FIELDS} total storage fields");
+    }
+    for map in maps {
+        if storage.iter().any(|field| field.name == map.name) {
+            bail!("storage name '{}' is used by a scalar and a map", map.name);
         }
     }
     Ok(())
@@ -415,8 +785,14 @@ fn validate_events(events: &[EventDefinition]) -> Result<()> {
 fn validate_functions(
     functions: &[Function],
     storage: &[StorageField],
+    maps: &[MapField],
     events: &[EventDefinition],
 ) -> Result<()> {
+    let schema = ValidationSchema {
+        storage,
+        maps,
+        events,
+    };
     if functions.is_empty() || functions.len() > MAX_FUNCTIONS {
         bail!("program must contain between 1 and {MAX_FUNCTIONS} functions");
     }
@@ -453,7 +829,7 @@ fn validate_functions(
                     instructions,
                     &function.parameters,
                     &[],
-                    storage,
+                    &schema,
                     function.return_type,
                 )?;
             }
@@ -463,8 +839,7 @@ fn validate_functions(
                     &function.parameters,
                     function.return_type,
                     &[],
-                    storage,
-                    events,
+                    &schema,
                     0,
                 )?;
                 if !terminal {
@@ -490,6 +865,52 @@ fn encode_statements(bytes: &mut Vec<u8>, statements: &[Statement]) -> Result<()
     push_u16(bytes, statements.len())?;
     for statement in statements {
         match statement {
+            Statement::PayloadInvoke {
+                read_only,
+                target,
+                value,
+                payload,
+            } => {
+                bytes.push(if *read_only { 17 } else { 16 });
+                for expression in [target, value, payload] {
+                    encode_expression(bytes, expression)?;
+                }
+            }
+            Statement::Create {
+                template,
+                salt,
+                initializer,
+                value,
+                arguments,
+            } => {
+                bytes.push(15);
+                for expression in [template, salt, initializer, value] {
+                    encode_expression(bytes, expression)?;
+                }
+                push_u16(bytes, arguments.len())?;
+                for (ty, expression) in arguments {
+                    bytes.push(*ty as u8);
+                    encode_expression(bytes, expression)?;
+                }
+            }
+            Statement::Invoke {
+                return_type,
+                target,
+                selector,
+                value,
+                arguments,
+            } => {
+                bytes.push(14);
+                bytes.push(*return_type as u8);
+                encode_expression(bytes, target)?;
+                encode_expression(bytes, selector)?;
+                encode_expression(bytes, value)?;
+                push_u16(bytes, arguments.len())?;
+                for (ty, expression) in arguments {
+                    bytes.push(*ty as u8);
+                    encode_expression(bytes, expression)?;
+                }
+            }
             Statement::Let {
                 value_type,
                 expression,
@@ -516,6 +937,11 @@ fn encode_statements(bytes: &mut Vec<u8>, statements: &[Statement]) -> Result<()
                 encode_expression(bytes, count)?;
                 encode_statements(bytes, body)?;
             }
+            Statement::Require(condition) => {
+                bytes.push(11);
+                encode_expression(bytes, condition)?;
+            }
+            Statement::Revert => bytes.push(12),
             Statement::Return(expression) => {
                 bytes.push(2);
                 encode_expression(bytes, expression)?;
@@ -523,6 +949,19 @@ fn encode_statements(bytes: &mut Vec<u8>, statements: &[Statement]) -> Result<()
             Statement::Store { field, expression } => {
                 bytes.push(4);
                 bytes.extend_from_slice(&field.to_be_bytes());
+                encode_expression(bytes, expression)?;
+            }
+            Statement::MapStore {
+                map,
+                keys,
+                expression,
+            } => {
+                bytes.push(13);
+                bytes.extend_from_slice(&map.to_be_bytes());
+                push_u16(bytes, keys.len())?;
+                for key in keys {
+                    encode_expression(bytes, key)?;
+                }
                 encode_expression(bytes, expression)?;
             }
             Statement::Emit { event, values } => {
@@ -565,6 +1004,11 @@ fn encode_statements(bytes: &mut Vec<u8>, statements: &[Statement]) -> Result<()
 
 fn encode_instruction(bytes: &mut Vec<u8>, instruction: &Instruction) {
     match instruction {
+        Instruction::CompactConstant(value_type, word) => {
+            let start = word.iter().position(|byte| *byte != 0).unwrap_or(32);
+            bytes.extend_from_slice(&[32, *value_type as u8, (32 - start) as u8]);
+            bytes.extend_from_slice(&word[start..]);
+        }
         Instruction::Constant(value_type, word) => {
             bytes.push(1);
             bytes.push(*value_type as u8);
@@ -582,6 +1026,10 @@ fn encode_instruction(bytes: &mut Vec<u8>, instruction: &Instruction) {
             bytes.push(10);
             bytes.extend_from_slice(&index.to_be_bytes());
         }
+        Instruction::MapStorage(index) => {
+            bytes.push(16);
+            bytes.extend_from_slice(&index.to_be_bytes());
+        }
         Instruction::MessageSender => bytes.push(11),
         Instruction::MessageValue => bytes.push(12),
         Instruction::BlockHeight => bytes.push(13),
@@ -593,6 +1041,21 @@ fn encode_instruction(bytes: &mut Vec<u8>, instruction: &Instruction) {
         Instruction::DivU64 => bytes.push(6),
         Instruction::Eq => bytes.push(7),
         Instruction::LtU64 => bytes.push(8),
+        Instruction::AddU256 => bytes.push(17),
+        Instruction::SubU256 => bytes.push(18),
+        Instruction::GteU256 => bytes.push(19),
+        Instruction::Keccak256 => bytes.push(20),
+        Instruction::BytesLen => bytes.push(21),
+        Instruction::BytesConcat => bytes.push(22),
+        Instruction::BytesSlice => bytes.push(23),
+        Instruction::BytesGet => bytes.push(24),
+        Instruction::WordBytes => bytes.push(25),
+        Instruction::BytesWord => bytes.push(26),
+        Instruction::WordAddress => bytes.push(27),
+        Instruction::WordU64 => bytes.push(28),
+        Instruction::WordU256 => bytes.push(29),
+        Instruction::Secp256k1Verify => bytes.push(30),
+        Instruction::ContractAddress => bytes.push(31),
     }
 }
 
@@ -619,6 +1082,39 @@ fn decode_instruction(reader: &mut Reader<'_>, version: u8) -> Result<Instructio
         13 if version >= CONTEXT_VERSION => Ok(Instruction::BlockHeight),
         14 if version >= CONTEXT_VERSION => Ok(Instruction::BlockTimestamp),
         15 if version >= CONTEXT_VERSION => Ok(Instruction::ChainId),
+        16 if version >= VERSION => Ok(Instruction::MapStorage(reader.u16()?)),
+        17 if version >= VERSION => Ok(Instruction::AddU256),
+        18 if version >= VERSION => Ok(Instruction::SubU256),
+        19 if version >= VERSION => Ok(Instruction::GteU256),
+        20 if version >= BYTES_VERSION => Ok(Instruction::Keccak256),
+        21 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::BytesLen),
+        22 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::BytesConcat),
+        23 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::BytesSlice),
+        24 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::BytesGet),
+        25 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::WordBytes),
+        26 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::BytesWord),
+        27 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::WordAddress),
+        28 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::WordU64),
+        29 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::WordU256),
+        30 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::Secp256k1Verify),
+        31 if version >= ACCOUNT_PRIMITIVES_VERSION => Ok(Instruction::ContractAddress),
+        32 if version >= COMPACT_CONSTANT_VERSION => {
+            let value_type = ValueType::from_byte(reader.byte()?)?;
+            let len = reader.byte()? as usize;
+            // At 31/32 bytes the compact form does not save space. Zero is empty;
+            // every nonempty payload begins with a nonzero byte (no malleability).
+            if len > 30 {
+                bail!("compact constant must save space");
+            }
+            let payload = reader.take(len)?;
+            if payload.first() == Some(&0) {
+                bail!("non-minimal compact constant");
+            }
+            let mut word = [0; 32];
+            word[32 - len..].copy_from_slice(payload);
+            validate_word(value_type, &word)?;
+            Ok(Instruction::CompactConstant(value_type, word))
+        }
         opcode => bail!("unknown LithoVM instruction opcode {opcode}"),
     }
 }
@@ -646,6 +1142,62 @@ fn decode_statements(reader: &mut Reader<'_>, version: u8, depth: usize) -> Resu
     let mut statements = Vec::with_capacity(statement_count);
     for _ in 0..statement_count {
         statements.push(match reader.byte()? {
+            opcode @ (16 | 17) if version >= ACCOUNT_PRIMITIVES_VERSION => {
+                Statement::PayloadInvoke {
+                    read_only: opcode == 17,
+                    target: decode_expression(reader, version)?,
+                    value: decode_expression(reader, version)?,
+                    payload: decode_expression(reader, version)?,
+                }
+            }
+            15 if version >= CREATE_VERSION => {
+                let template = decode_expression(reader, version)?;
+                let salt = decode_expression(reader, version)?;
+                let initializer = decode_expression(reader, version)?;
+                let value = decode_expression(reader, version)?;
+                let count = reader.u16()? as usize;
+                if count > MAX_PARAMETERS {
+                    bail!("too many creation arguments");
+                }
+                let mut arguments = Vec::with_capacity(count);
+                for _ in 0..count {
+                    arguments.push((
+                        ValueType::from_byte(reader.byte()?)?,
+                        decode_expression(reader, version)?,
+                    ));
+                }
+                Statement::Create {
+                    template,
+                    salt,
+                    initializer,
+                    value,
+                    arguments,
+                }
+            }
+            14 if version >= SYNC_VERSION => {
+                let return_type = ValueType::from_byte(reader.byte()?)?;
+                let target = decode_expression(reader, version)?;
+                let selector = decode_expression(reader, version)?;
+                let value = decode_expression(reader, version)?;
+                let count = reader.u16()? as usize;
+                if count > MAX_PARAMETERS {
+                    bail!("too many invocation arguments");
+                }
+                let mut arguments = Vec::with_capacity(count);
+                for _ in 0..count {
+                    arguments.push((
+                        ValueType::from_byte(reader.byte()?)?,
+                        decode_expression(reader, version)?,
+                    ));
+                }
+                Statement::Invoke {
+                    return_type,
+                    target,
+                    selector,
+                    value,
+                    arguments,
+                }
+            }
             1 => Statement::Let {
                 value_type: ValueType::from_byte(reader.byte()?)?,
                 expression: decode_expression(reader, version)?,
@@ -658,10 +1210,14 @@ fn decode_statements(reader: &mut Reader<'_>, version: u8, depth: usize) -> Resu
                 local: reader.u16()?,
                 expression: decode_expression(reader, version)?,
             },
-            10 if version >= VERSION => Statement::Repeat {
+            10 if version >= REPEAT_VERSION => Statement::Repeat {
                 count: decode_expression(reader, version)?,
                 body: decode_statements(reader, version, depth + 1)?,
             },
+            11 if version >= FAILURE_VERSION => {
+                Statement::Require(decode_expression(reader, version)?)
+            }
+            12 if version >= FAILURE_VERSION => Statement::Revert,
             2 => Statement::Return(decode_expression(reader, version)?),
             3 => Statement::If {
                 condition: decode_expression(reader, version)?,
@@ -672,6 +1228,22 @@ fn decode_statements(reader: &mut Reader<'_>, version: u8, depth: usize) -> Resu
                 field: reader.u16()?,
                 expression: decode_expression(reader, version)?,
             },
+            13 if version >= VERSION => {
+                let map = reader.u16()?;
+                let key_count = reader.u16()? as usize;
+                if key_count == 0 || key_count > MAX_PARAMETERS {
+                    bail!("invalid map key count {key_count}");
+                }
+                let mut keys = Vec::with_capacity(key_count);
+                for _ in 0..key_count {
+                    keys.push(decode_expression(reader, version)?);
+                }
+                Statement::MapStore {
+                    map,
+                    keys,
+                    expression: decode_expression(reader, version)?,
+                }
+            }
             5 if version >= EVENT_VERSION => {
                 let event = reader.u16()?;
                 let count = reader.u16()? as usize;
@@ -703,7 +1275,7 @@ fn validate_expression(
     instructions: &[Instruction],
     parameters: &[ValueType],
     locals: &[ValueType],
-    storage: &[StorageField],
+    schema: &ValidationSchema<'_>,
     return_type: ValueType,
 ) -> Result<()> {
     if instructions.is_empty() || instructions.len() > MAX_INSTRUCTIONS {
@@ -712,8 +1284,12 @@ fn validate_expression(
     let mut stack = Vec::new();
     for instruction in instructions {
         match instruction {
-            Instruction::Constant(value_type, word) => {
+            Instruction::Constant(value_type, word)
+            | Instruction::CompactConstant(value_type, word) => {
                 validate_word(*value_type, word)?;
+                if matches!(instruction, Instruction::CompactConstant(..)) && word[..2] != [0; 2] {
+                    bail!("compact constant must save space");
+                }
                 stack.push(*value_type);
             }
             Instruction::Parameter(index) => stack.push(
@@ -727,11 +1303,22 @@ fn validate_expression(
                     .ok_or_else(|| anyhow!("expression local index {index} is out of range"))?,
             ),
             Instruction::Storage(index) => stack.push(
-                storage
+                schema
+                    .storage
                     .get(*index as usize)
                     .ok_or_else(|| anyhow!("expression storage index {index} is out of range"))?
                     .value_type,
             ),
+            Instruction::MapStorage(index) => {
+                let map = schema
+                    .maps
+                    .get(*index as usize)
+                    .ok_or_else(|| anyhow!("expression map index {index} is out of range"))?;
+                for key_type in map.key_types.iter().rev() {
+                    pop_expected(&mut stack, *key_type)?;
+                }
+                stack.push(map.value_type);
+            }
             Instruction::MessageSender => stack.push(ValueType::Address),
             Instruction::MessageValue => stack.push(ValueType::U256),
             Instruction::BlockHeight | Instruction::BlockTimestamp | Instruction::ChainId => {
@@ -762,6 +1349,68 @@ fn validate_expression(
                 pop_expected(&mut stack, ValueType::U64)?;
                 stack.push(ValueType::Bool);
             }
+            Instruction::AddU256 | Instruction::SubU256 => {
+                pop_expected(&mut stack, ValueType::U256)?;
+                pop_expected(&mut stack, ValueType::U256)?;
+                stack.push(ValueType::U256);
+            }
+            Instruction::GteU256 => {
+                pop_expected(&mut stack, ValueType::U256)?;
+                pop_expected(&mut stack, ValueType::U256)?;
+                stack.push(ValueType::Bool);
+            }
+            Instruction::Keccak256 => {
+                pop_expected(&mut stack, ValueType::Bytes)?;
+                stack.push(ValueType::Bytes32);
+            }
+            Instruction::ContractAddress => stack.push(ValueType::Address),
+            Instruction::BytesLen => {
+                pop_expected(&mut stack, ValueType::Bytes)?;
+                stack.push(ValueType::U64);
+            }
+            Instruction::BytesConcat => {
+                pop_expected(&mut stack, ValueType::Bytes)?;
+                pop_expected(&mut stack, ValueType::Bytes)?;
+                stack.push(ValueType::Bytes);
+            }
+            Instruction::BytesSlice => {
+                pop_expected(&mut stack, ValueType::U64)?;
+                pop_expected(&mut stack, ValueType::U64)?;
+                pop_expected(&mut stack, ValueType::Bytes)?;
+                stack.push(ValueType::Bytes);
+            }
+            Instruction::BytesGet => {
+                pop_expected(&mut stack, ValueType::U64)?;
+                pop_expected(&mut stack, ValueType::Bytes)?;
+                stack.push(ValueType::U64);
+            }
+            Instruction::WordBytes => {
+                let ty = stack
+                    .pop()
+                    .ok_or_else(|| anyhow!("expression stack underflow"))?;
+                if matches!(ty, ValueType::Bytes | ValueType::String) {
+                    bail!("word_bytes requires a scalar word");
+                }
+                stack.push(ValueType::Bytes);
+            }
+            Instruction::BytesWord => {
+                pop_expected(&mut stack, ValueType::Bytes)?;
+                stack.push(ValueType::Bytes32);
+            }
+            Instruction::WordAddress | Instruction::WordU64 | Instruction::WordU256 => {
+                pop_expected(&mut stack, ValueType::Bytes32)?;
+                stack.push(match instruction {
+                    Instruction::WordAddress => ValueType::Address,
+                    Instruction::WordU64 => ValueType::U64,
+                    _ => ValueType::U256,
+                });
+            }
+            Instruction::Secp256k1Verify => {
+                pop_expected(&mut stack, ValueType::Address)?;
+                pop_expected(&mut stack, ValueType::Bytes)?;
+                pop_expected(&mut stack, ValueType::Bytes32)?;
+                stack.push(ValueType::Bool);
+            }
         }
     }
     if stack.as_slice() != [return_type] {
@@ -775,8 +1424,7 @@ fn validate_statements(
     parameters: &[ValueType],
     return_type: ValueType,
     inherited_locals: &[(ValueType, bool)],
-    storage: &[StorageField],
-    events: &[EventDefinition],
+    schema: &ValidationSchema<'_>,
     depth: usize,
 ) -> Result<bool> {
     if depth > MAX_BLOCK_DEPTH {
@@ -792,11 +1440,75 @@ fn validate_statements(
             bail!("unreachable statement after terminal return or branch");
         }
         match statement {
+            Statement::PayloadInvoke {
+                target,
+                value,
+                payload,
+                ..
+            } => {
+                validate_expression(target, parameters, &locals, schema, ValueType::Address)?;
+                validate_expression(value, parameters, &locals, schema, ValueType::U256)?;
+                validate_expression(payload, parameters, &locals, schema, ValueType::Bytes)?;
+                if locals.len() >= MAX_LOCALS {
+                    bail!("too many local bindings");
+                }
+                locals.push(ValueType::Bytes);
+                mutable.push(false);
+            }
+            Statement::Create {
+                template,
+                salt,
+                initializer,
+                value,
+                arguments,
+            } => {
+                for (expression, ty) in [
+                    (template, ValueType::Address),
+                    (salt, ValueType::Bytes32),
+                    (initializer, ValueType::Bytes32),
+                    (value, ValueType::U256),
+                ] {
+                    validate_expression(expression, parameters, &locals, schema, ty)?;
+                }
+                if arguments.len() > MAX_PARAMETERS {
+                    bail!("too many creation arguments");
+                }
+                for (ty, expression) in arguments {
+                    validate_expression(expression, parameters, &locals, schema, *ty)?;
+                }
+                if locals.len() >= MAX_LOCALS {
+                    bail!("too many local bindings");
+                }
+                locals.push(ValueType::Address);
+                mutable.push(false);
+            }
+            Statement::Invoke {
+                return_type,
+                target,
+                selector,
+                value,
+                arguments,
+            } => {
+                validate_expression(target, parameters, &locals, schema, ValueType::Address)?;
+                validate_expression(selector, parameters, &locals, schema, ValueType::Bytes32)?;
+                validate_expression(value, parameters, &locals, schema, ValueType::U256)?;
+                if arguments.len() > MAX_PARAMETERS {
+                    bail!("too many invocation arguments");
+                }
+                for (ty, expression) in arguments {
+                    validate_expression(expression, parameters, &locals, schema, *ty)?;
+                }
+                if locals.len() >= MAX_LOCALS {
+                    bail!("too many local bindings");
+                }
+                locals.push(*return_type);
+                mutable.push(false);
+            }
             Statement::Let {
                 value_type,
                 expression,
             } => {
-                validate_expression(expression, parameters, &locals, storage, *value_type)?;
+                validate_expression(expression, parameters, &locals, schema, *value_type)?;
                 if locals.len() >= MAX_LOCALS {
                     bail!("function exceeds {MAX_LOCALS} local bindings");
                 }
@@ -807,7 +1519,7 @@ fn validate_statements(
                 value_type,
                 expression,
             } => {
-                validate_expression(expression, parameters, &locals, storage, *value_type)?;
+                validate_expression(expression, parameters, &locals, schema, *value_type)?;
                 if locals.len() >= MAX_LOCALS {
                     bail!("function exceeds {MAX_LOCALS} local bindings");
                 }
@@ -822,38 +1534,59 @@ fn validate_statements(
                 if !mutable[index] {
                     bail!("local assignment targets an immutable binding");
                 }
-                validate_expression(expression, parameters, &locals, storage, value_type)?;
+                validate_expression(expression, parameters, &locals, schema, value_type)?;
             }
             Statement::Repeat { count, body } => {
-                validate_expression(count, parameters, &locals, storage, ValueType::U64)?;
+                validate_expression(count, parameters, &locals, schema, ValueType::U64)?;
                 let bindings = locals
                     .iter()
                     .copied()
                     .zip(mutable.iter().copied())
                     .collect::<Vec<_>>();
-                validate_statements(
-                    body,
-                    parameters,
-                    return_type,
-                    &bindings,
-                    storage,
-                    events,
-                    depth + 1,
-                )?;
+                validate_statements(body, parameters, return_type, &bindings, schema, depth + 1)?;
             }
+            Statement::Require(condition) => {
+                validate_expression(condition, parameters, &locals, schema, ValueType::Bool)?;
+            }
+            Statement::Revert => terminal = true,
             Statement::Return(expression) => {
-                validate_expression(expression, parameters, &locals, storage, return_type)?;
+                validate_expression(expression, parameters, &locals, schema, return_type)?;
                 terminal = true;
             }
             Statement::Store { field, expression } => {
-                let value_type = storage
+                let value_type = schema
+                    .storage
                     .get(*field as usize)
                     .ok_or_else(|| anyhow!("store field index {field} is out of range"))?
                     .value_type;
-                validate_expression(expression, parameters, &locals, storage, value_type)?;
+                validate_expression(expression, parameters, &locals, schema, value_type)?;
+            }
+            Statement::MapStore {
+                map,
+                keys,
+                expression,
+            } => {
+                let definition = schema
+                    .maps
+                    .get(*map as usize)
+                    .ok_or_else(|| anyhow!("map store index {map} is out of range"))?;
+                if keys.len() != definition.key_types.len() {
+                    bail!("map store key count does not match schema");
+                }
+                for (key, key_type) in keys.iter().zip(&definition.key_types) {
+                    validate_expression(key, parameters, &locals, schema, *key_type)?;
+                }
+                validate_expression(
+                    expression,
+                    parameters,
+                    &locals,
+                    schema,
+                    definition.value_type,
+                )?;
             }
             Statement::Emit { event, values } => {
-                let definition = events
+                let definition = schema
+                    .events
                     .get(*event as usize)
                     .ok_or_else(|| anyhow!("event index {event} is out of range"))?;
                 if values.len() != definition.fields.len() {
@@ -863,28 +1596,28 @@ fn validate_statements(
                     );
                 }
                 for (value, field) in values.iter().zip(&definition.fields) {
-                    validate_expression(value, parameters, &locals, storage, field.value_type)?;
+                    validate_expression(value, parameters, &locals, schema, field.value_type)?;
                 }
             }
             Statement::Transfer { recipient, amount } => {
-                validate_expression(recipient, parameters, &locals, storage, ValueType::Address)?;
-                validate_expression(amount, parameters, &locals, storage, ValueType::U256)?;
+                validate_expression(recipient, parameters, &locals, schema, ValueType::Address)?;
+                validate_expression(amount, parameters, &locals, schema, ValueType::U256)?;
             }
             Statement::Call {
                 target,
                 selector,
                 value,
             } => {
-                validate_expression(target, parameters, &locals, storage, ValueType::Address)?;
-                validate_expression(selector, parameters, &locals, storage, ValueType::Bytes32)?;
-                validate_expression(value, parameters, &locals, storage, ValueType::U256)?;
+                validate_expression(target, parameters, &locals, schema, ValueType::Address)?;
+                validate_expression(selector, parameters, &locals, schema, ValueType::Bytes32)?;
+                validate_expression(value, parameters, &locals, schema, ValueType::U256)?;
             }
             Statement::If {
                 condition,
                 then_branch,
                 else_branch,
             } => {
-                validate_expression(condition, parameters, &locals, storage, ValueType::Bool)?;
+                validate_expression(condition, parameters, &locals, schema, ValueType::Bool)?;
                 let bindings = locals
                     .iter()
                     .copied()
@@ -895,8 +1628,7 @@ fn validate_statements(
                     parameters,
                     return_type,
                     &bindings,
-                    storage,
-                    events,
+                    schema,
                     depth + 1,
                 )?;
                 let else_terminal = validate_statements(
@@ -904,8 +1636,7 @@ fn validate_statements(
                     parameters,
                     return_type,
                     &bindings,
-                    storage,
-                    events,
+                    schema,
                     depth + 1,
                 )?;
                 terminal = then_terminal && else_terminal;
@@ -1005,6 +1736,7 @@ mod tests {
     fn sample() -> Program {
         Program {
             storage: vec![],
+            maps: vec![],
             events: vec![],
             functions: vec![Function {
                 name: "answer".into(),
@@ -1019,11 +1751,24 @@ mod tests {
         }
     }
 
-    fn strip_empty_event_table(mut bytes: Vec<u8>, storage: &[StorageField]) -> Vec<u8> {
+    fn storage_table_end(storage: &[StorageField]) -> usize {
         let mut offset = MAGIC.len() + 1 + 2;
         for field in storage {
             offset += 2 + field.name.len() + 1;
         }
+        offset
+    }
+
+    fn strip_empty_map_table(mut bytes: Vec<u8>, storage: &[StorageField]) -> Vec<u8> {
+        let offset = storage_table_end(storage);
+        assert_eq!(&bytes[offset..offset + 2], &[0, 0]);
+        bytes.drain(offset..offset + 2);
+        bytes
+    }
+
+    fn strip_empty_map_and_event_tables(bytes: Vec<u8>, storage: &[StorageField]) -> Vec<u8> {
+        let mut bytes = strip_empty_map_table(bytes, storage);
+        let offset = storage_table_end(storage);
         assert_eq!(&bytes[offset..offset + 2], &[0, 0]);
         bytes.drain(offset..offset + 2);
         bytes
@@ -1047,7 +1792,7 @@ mod tests {
         trailing.push(0);
         assert!(parse(&trailing).is_err());
         let mut version = bytes;
-        version[MAGIC.len()] = VERSION + 1;
+        version[MAGIC.len()] = COMPACT_CONSTANT_VERSION + 1;
         assert!(parse(&version).is_err());
     }
 
@@ -1062,6 +1807,7 @@ mod tests {
     fn typed_expression_round_trips_and_rejects_bad_stacks() {
         let program = Program {
             storage: vec![],
+            maps: vec![],
             events: vec![],
             functions: vec![Function {
                 name: "add".into(),
@@ -1080,7 +1826,7 @@ mod tests {
         };
         let bytes = program.encode().unwrap();
         assert_eq!(parse(&bytes).unwrap(), program);
-        let mut v3 = strip_empty_event_table(bytes.clone(), &program.storage);
+        let mut v3 = strip_empty_map_and_event_tables(bytes.clone(), &program.storage);
         v3[MAGIC.len()] = STORAGE_VERSION;
         assert_eq!(parse(&v3).unwrap(), program);
 
@@ -1093,6 +1839,7 @@ mod tests {
     fn structured_statements_round_trip_and_validate_local_types() {
         let program = Program {
             storage: vec![],
+            maps: vec![],
             events: vec![],
             functions: vec![Function {
                 name: "choose".into(),
@@ -1138,27 +1885,33 @@ mod tests {
         for version in [LEGACY_VERSION, STATEMENT_VERSION] {
             let mut bytes = sample().encode().unwrap();
             bytes[MAGIC.len()] = version;
-            bytes.drain(MAGIC.len() + 1..MAGIC.len() + 5);
+            bytes.drain(MAGIC.len() + 1..MAGIC.len() + 7);
             assert_eq!(parse(&bytes).unwrap(), sample());
         }
 
         for version in [STORAGE_VERSION, CONTEXT_VERSION] {
-            let mut bytes = strip_empty_event_table(sample().encode().unwrap(), &[]);
+            let mut bytes = strip_empty_map_and_event_tables(sample().encode().unwrap(), &[]);
             bytes[MAGIC.len()] = version;
             assert_eq!(parse(&bytes).unwrap(), sample());
         }
-        let mut v5 = sample().encode().unwrap();
+        let mut v5 = strip_empty_map_table(sample().encode().unwrap(), &[]);
         v5[MAGIC.len()] = EVENT_VERSION;
         assert_eq!(parse(&v5).unwrap(), sample());
-        let mut v6 = sample().encode().unwrap();
+        let mut v6 = strip_empty_map_table(sample().encode().unwrap(), &[]);
         v6[MAGIC.len()] = TRANSFER_VERSION;
         assert_eq!(parse(&v6).unwrap(), sample());
-        let mut v7 = sample().encode().unwrap();
+        let mut v7 = strip_empty_map_table(sample().encode().unwrap(), &[]);
         v7[MAGIC.len()] = CALL_VERSION;
         assert_eq!(parse(&v7).unwrap(), sample());
-        let mut v8 = sample().encode().unwrap();
+        let mut v8 = strip_empty_map_table(sample().encode().unwrap(), &[]);
         v8[MAGIC.len()] = MUTABLE_VERSION;
         assert_eq!(parse(&v8).unwrap(), sample());
+        let mut v9 = strip_empty_map_table(sample().encode().unwrap(), &[]);
+        v9[MAGIC.len()] = REPEAT_VERSION;
+        assert_eq!(parse(&v9).unwrap(), sample());
+        let mut v10 = strip_empty_map_table(sample().encode().unwrap(), &[]);
+        v10[MAGIC.len()] = FAILURE_VERSION;
+        assert_eq!(parse(&v10).unwrap(), sample());
     }
 
     #[test]
@@ -1168,6 +1921,7 @@ mod tests {
                 name: "count".into(),
                 value_type: ValueType::U64,
             }],
+            maps: vec![],
             events: vec![],
             functions: vec![Function {
                 name: "set".into(),
@@ -1184,7 +1938,7 @@ mod tests {
         };
         let bytes = program.encode().unwrap();
         assert_eq!(parse(&bytes).unwrap(), program);
-        let mut storage_v3 = strip_empty_event_table(bytes.clone(), &program.storage);
+        let mut storage_v3 = strip_empty_map_and_event_tables(bytes.clone(), &program.storage);
         storage_v3[MAGIC.len()] = STORAGE_VERSION;
         assert_eq!(parse(&storage_v3).unwrap(), program);
 
@@ -1200,6 +1954,43 @@ mod tests {
     }
 
     #[test]
+    fn typed_map_storage_and_u256_operations_round_trip() {
+        let program = Program {
+            storage: vec![],
+            maps: vec![MapField {
+                name: "balances".into(),
+                key_types: vec![ValueType::Address],
+                value_type: ValueType::U256,
+            }],
+            events: vec![],
+            functions: vec![Function {
+                name: "credit".into(),
+                parameters: vec![ValueType::Address, ValueType::U256],
+                return_type: ValueType::U256,
+                return_value: ReturnValue::Statements(vec![
+                    Statement::MapStore {
+                        map: 0,
+                        keys: vec![vec![Instruction::Parameter(0)]],
+                        expression: vec![
+                            Instruction::Parameter(0),
+                            Instruction::MapStorage(0),
+                            Instruction::Parameter(1),
+                            Instruction::AddU256,
+                        ],
+                    },
+                    Statement::Return(vec![Instruction::Parameter(0), Instruction::MapStorage(0)]),
+                ]),
+            }],
+        };
+        let bytes = program.encode().unwrap();
+        assert_eq!(parse(&bytes).unwrap(), program);
+
+        let mut invalid = program;
+        invalid.maps[0].key_types[0] = ValueType::Bool;
+        assert!(invalid.encode().is_err());
+    }
+
+    #[test]
     fn execution_context_instructions_round_trip_with_static_types() {
         for (instruction, return_type) in [
             (Instruction::MessageSender, ValueType::Address),
@@ -1210,6 +2001,7 @@ mod tests {
         ] {
             let program = Program {
                 storage: vec![],
+                maps: vec![],
                 events: vec![],
                 functions: vec![Function {
                     name: "context".into(),
@@ -1220,7 +2012,7 @@ mod tests {
             };
             let bytes = program.encode().unwrap();
             assert_eq!(parse(&bytes).unwrap(), program);
-            let mut mislabeled_v3 = strip_empty_event_table(bytes, &[]);
+            let mut mislabeled_v3 = strip_empty_map_and_event_tables(bytes, &[]);
             mislabeled_v3[MAGIC.len()] = STORAGE_VERSION;
             assert!(parse(&mislabeled_v3).is_err());
         }
@@ -1230,6 +2022,7 @@ mod tests {
     fn typed_event_schema_and_emission_round_trip() {
         let program = Program {
             storage: vec![],
+            maps: vec![],
             events: vec![EventDefinition {
                 name: "Changed".into(),
                 fields: vec![StorageField {
@@ -1268,6 +2061,7 @@ mod tests {
     fn native_transfer_statement_round_trips_with_static_types() {
         let program = Program {
             storage: vec![],
+            maps: vec![],
             events: vec![],
             functions: vec![Function {
                 name: "pay".into(),
@@ -1293,6 +2087,7 @@ mod tests {
     fn contract_call_statement_round_trips_with_static_types() {
         let program = Program {
             storage: vec![],
+            maps: vec![],
             events: vec![],
             functions: vec![Function {
                 name: "invoke".into(),
@@ -1319,6 +2114,7 @@ mod tests {
     fn mutable_local_statements_round_trip_and_reject_immutable_assignment() {
         let program = Program {
             storage: vec![],
+            maps: vec![],
             events: vec![],
             functions: vec![Function {
                 name: "increment".into(),
@@ -1366,6 +2162,7 @@ mod tests {
     fn repeat_statement_round_trips_and_requires_u64_count() {
         let program = Program {
             storage: vec![],
+            maps: vec![],
             events: vec![],
             functions: vec![Function {
                 name: "count".into(),
@@ -1409,6 +2206,60 @@ mod tests {
             unreachable!()
         };
         *count = vec![Instruction::Constant(ValueType::Bool, [0; 32])];
+        assert!(invalid.encode().is_err());
+    }
+
+    #[test]
+    fn canonical_selector_matches_the_published_vector() {
+        let function = Function {
+            name: "transfer".into(),
+            parameters: vec![ValueType::Address, ValueType::U256],
+            return_type: ValueType::Bool,
+            return_value: ReturnValue::Constant([0; 32]),
+        };
+
+        assert_eq!(function_signature(&function), "transfer(address,u256)");
+        assert_eq!(
+            hex::encode(function_selector(&function)),
+            "f61367304e4e32065cad538b10a44bb599f78e0771530108572d225c74122c1f"
+        );
+    }
+
+    #[test]
+    fn failure_statements_round_trip_and_require_bool() {
+        let program = Program {
+            storage: vec![],
+            maps: vec![],
+            events: vec![],
+            functions: vec![Function {
+                name: "guarded".into(),
+                parameters: vec![ValueType::Bool],
+                return_type: ValueType::U64,
+                return_value: ReturnValue::Statements(vec![
+                    Statement::Require(vec![Instruction::Parameter(0)]),
+                    Statement::If {
+                        condition: vec![Instruction::Parameter(0)],
+                        then_branch: vec![Statement::Return(vec![Instruction::Constant(
+                            ValueType::U64,
+                            [0; 32],
+                        )])],
+                        else_branch: vec![Statement::Revert],
+                    },
+                ]),
+            }],
+        };
+        let bytes = program.encode().unwrap();
+        assert_eq!(parse(&bytes).unwrap(), program);
+
+        let mut mislabeled_v9 = bytes;
+        mislabeled_v9[MAGIC.len()] = REPEAT_VERSION;
+        assert!(parse(&mislabeled_v9).is_err());
+
+        let mut invalid = program;
+        let ReturnValue::Statements(statements) = &mut invalid.functions[0].return_value else {
+            unreachable!()
+        };
+        statements[0] = Statement::Require(vec![Instruction::Constant(ValueType::U64, [0; 32])]);
         assert!(invalid.encode().is_err());
     }
 }

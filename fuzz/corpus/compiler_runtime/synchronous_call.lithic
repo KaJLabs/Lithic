@@ -1,0 +1,6 @@
+contract Caller {
+    pub fn run(target: address, selector: bytes32, number: u64) -> u64 {
+        let answer: u64 = invoke(target, selector, 0, number);
+        return answer + 1;
+    }
+}

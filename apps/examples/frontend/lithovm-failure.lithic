@@ -1,0 +1,14 @@
+contract GuardedCounter {
+  state { count: u64; }
+
+  pub fn set(allowed: bool, value: u64) -> u64 {
+    self.count = value;
+    require(allowed);
+    return self.count;
+  }
+
+  pub fn abort() -> u64 {
+    self.count = 0;
+    revert();
+  }
+}

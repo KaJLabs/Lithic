@@ -1,0 +1,4 @@
+/artifacts/
+/target/
+/corpus/stateful_maps/*
+!/corpus/stateful_maps/basic

@@ -1,5 +1,6 @@
 [package]
 name = "lithc"
+default-run = "lithc"
 version = "0.2.0"
 edition = "2021"
 license = "Apache-2.0"
@@ -13,3 +14,18 @@ path = "src/main.rs"
 lithic-evm = { path = "../lithic-evm" }
 lithic-lithovm = { path = "../lithic-lithovm" }
 lithic-syntax = { path = "../lithic-syntax" }
+lithovm-bytecode = { path = "../../vm/bytecode" }
+lithovm-host = { path = "../../vm/lithovm-host" }
+lithovm-ffi = { path = "../../vm/lithovm-ffi" }
+hex = "0.4"
+sha3 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[[bin]]
+name = "lithverify"
+path = "src/verify.rs"
+
+[[bin]]
+name = "lithdev"
+path = "src/dev.rs"

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lithic.at/schemas/lithovm.deployment-status.schema.json",
+  "title": "LithoVM deployment status v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "deploymentId", "state", "chainId", "codeHash", "updatedAt"],
+  "properties": {
+    "schemaVersion": { "const": "lithovm-deployment-status-v1" },
+    "deploymentId": { "type": "string", "minLength": 1 },
+    "state": {
+      "enum": ["prepared", "submitted", "included", "failed", "verified", "verification_failed"]
+    },
+    "chainId": { "type": "integer", "minimum": 1 },
+    "codeHash": { "$ref": "#/$defs/hash" },
+    "expectedAddress": { "$ref": "#/$defs/address" },
+    "transactionHash": { "$ref": "#/$defs/hash" },
+    "contractAddress": { "$ref": "#/$defs/address" },
+    "blockHeight": { "type": "integer", "minimum": 0 },
+    "gasUsed": { "type": "integer", "minimum": 0 },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "message"],
+      "properties": {
+        "kind": { "type": "string", "minLength": 1 },
+        "message": { "type": "string" }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceHash", "rebuiltCodeHash", "compilerVersion"],
+      "properties": {
+        "sourceHash": { "$ref": "#/$defs/hash" },
+        "rebuiltCodeHash": { "$ref": "#/$defs/hash" },
+        "compilerVersion": { "type": "string", "minLength": 1 }
+      }
+    },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^0x[0-9a-f]{64}$" },
+    "address": { "type": "string", "pattern": "^0x[0-9a-f]{40}$" }
+  }
+}

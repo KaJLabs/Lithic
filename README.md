@@ -1,6 +1,6 @@
 # Lithic — AI-Native Smart Contract Language for Lithosphere
 
-[![Status](https://img.shields.io/badge/status-final-blue.svg)](#)
+[![Status](https://img.shields.io/badge/status-production%20candidate-orange.svg)](docs/IMPLEMENTATION_STATUS.md)
 [![Language](https://img.shields.io/badge/language-Lithic%20(.lithic)-111827.svg)](#)
 [![Target](https://img.shields.io/badge/target-LithoVM-0ea5e9.svg)](#)
 [![Standards](https://img.shields.io/badge/standards-LEP100%20(1%E2%80%9314)-7b2cff.svg)](#lep100-standards)
@@ -18,6 +18,13 @@
 ---
 
 ## What is Lithic?
+
+The current checkout is a compiler/runtime candidate, not a certified production
+release. See the [implementation status](docs/IMPLEMENTATION_STATUS.md) for the
+supported language subset and [release process](docs/RELEASE_PROCESS.md) for the
+combined compiler/native-runtime build and verification procedure. Network
+activation and contract approvals are established by their separate chain
+evidence; a repository badge or successful local build does not establish them.
 
 **Lithic** is Lithosphere’s native smart-contract programming language for deploying **AI-native** applications and agents onchain.
 
@@ -118,7 +125,7 @@ Lithic is the reference language target for the LEP100 modular protocol stack:
 
 ### Compiler
 
-- `lithc` — parse/check/ABI plus fail-closed EVM and versioned native LithoVM backends  
+- `lithc` — parse/check/ABI plus fail-closed EVM and versioned native LithoVM backends; native artifacts include reproducible source/code hashes and canonical selectors  
 
 ### Developer Experience
 
@@ -171,15 +178,22 @@ Contracts MUST explicitly declare sensitive privileges, enabling:
 ## Getting Started
 
 This repository contains preview `lithc 0.2.0` EVM and native LithoVM backends.
-The native v9 target includes typed contract constants, gas-bounded repeat loops, mutable and immutable locals, staged outbound
+The native v11 target includes typed contract constants, gas-bounded repeat loops, mutable and immutable locals, staged outbound
 contract-call intents and native-value transfers, typed event emission,
 explicit message, block and chain context, transactional scalar storage,
-structured branches and checked `u64` expressions. Read
+typed keyed storage, structured branches, checked `u64`/`u256` expressions and explicit transactional
+`require`/`revert` failures. A transactional host conformance adapter adds
+structured failure/gas outcomes, atomic nested zero-argument calls, balance
+commit, a fail-closed reentrancy policy, and deterministic atomic deployment
+with initializer execution. Read
 [EVM backend v1](docs/EVM_BACKEND_V1.md) and
-[Native LithoVM ABI v9](docs/LITHOVM_ABI_V9.md) and
+[Native LithoVM ABI v11](docs/LITHOVM_ABI_V11.md) and
+[LithoVM transactional host v1](docs/LITHOVM_HOST_V1.md) and
+[LithoVM deployment interface v1](docs/LITHOVM_DEPLOYMENT_V1.md) and
+[LithoVM verification interface v1](docs/LITHOVM_VERIFICATION_V1.md) and
 [Implementation status](docs/IMPLEMENTATION_STATUS.md) for exact capabilities
-and LEP100-15 status. Synchronous calls, collection storage and LEP100-15
-execution remain under development.
+and LEP100-15 status. Call calldata/return data, general collections and
+LEP100-15 execution remain under development.
 
 ---
 

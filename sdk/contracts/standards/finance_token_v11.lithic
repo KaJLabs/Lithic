@@ -1,0 +1,148 @@
+contract FinanceToken {
+    const ZERO: address = 0x0000000000000000000000000000000000000000;
+    const UNLIMITED: u256 = 115792089237316195423570985008687907853269984665640564039457584007913129639935;
+    state {
+        initialized: bool;
+        owner: address;
+        decimals: u64;
+        total_supply: u256;
+        mintable: bool;
+        burnable: bool;
+        pausable: bool;
+        paused: bool;
+        balances: map<address, u256>;
+        allowances: map<address, map<address, u256>>;
+    }
+    event Transfer { from: address, to: address, amount: u256 }
+    event Approval { owner: address, spender: address, amount: u256 }
+    event OwnershipTransferred { previous: address, next: address }
+    event Paused { account: address }
+    event Unpaused { account: address }
+
+    pub fn initialize(creator: address, decimals: u64, supply: u256, mintable: bool, burnable: bool, pausable: bool, ownership: bool) -> bool {
+        require(self.initialized == false);
+        require((creator == ZERO) == false);
+        require(decimals < 256);
+        self.initialized = true;
+        self.owner = creator;
+        self.decimals = decimals;
+        self.total_supply = supply;
+        self.balances[creator] = supply;
+        self.mintable = mintable;
+        self.burnable = burnable;
+        self.pausable = pausable;
+        emit OwnershipTransferred { previous: ZERO, next: creator };
+        emit Transfer { from: ZERO, to: creator, amount: supply };
+        if ownership == false {
+            self.owner = ZERO;
+            emit OwnershipTransferred { previous: creator, next: ZERO };
+        }
+        return true;
+    }
+    pub fn owner() -> address { return self.owner; }
+    pub fn decimals() -> u64 { return self.decimals; }
+    pub fn total_supply() -> u256 { return self.total_supply; }
+    pub fn balance_of(account: address) -> u256 { return self.balances[account]; }
+    pub fn paused() -> bool { return self.paused; }
+    pub fn allowance(owner: address, spender: address) -> u256 {
+        return self.allowances[owner][spender];
+    }
+    pub fn approve(spender: address, amount: u256) -> bool {
+        require((msg.sender == ZERO) == false);
+        require((spender == ZERO) == false);
+        self.allowances[msg.sender][spender] = amount;
+        emit Approval { owner: msg.sender, spender: spender, amount: amount };
+        return true;
+    }
+    pub fn transfer_from(from: address, to: address, amount: u256) -> bool {
+        require((msg.sender == ZERO) == false);
+        require((from == ZERO) == false);
+        require((to == ZERO) == false);
+        require(self.paused == false);
+        let allowed: u256 = self.allowances[from][msg.sender];
+        if (allowed == UNLIMITED) == false {
+            self.allowances[from][msg.sender] = allowed - amount;
+        }
+        self.balances[from] = self.balances[from] - amount;
+        self.balances[to] = self.balances[to] + amount;
+        emit Transfer { from: from, to: to, amount: amount };
+        return true;
+    }
+    pub fn burn_from(from: address, amount: u256) -> bool {
+        require((msg.sender == ZERO) == false);
+        require((from == ZERO) == false);
+        require(self.burnable);
+        require(self.paused == false);
+        let allowed: u256 = self.allowances[from][msg.sender];
+        if (allowed == UNLIMITED) == false {
+            self.allowances[from][msg.sender] = allowed - amount;
+        }
+        self.balances[from] = self.balances[from] - amount;
+        self.total_supply = self.total_supply - amount;
+        emit Transfer { from: from, to: ZERO, amount: amount };
+        return true;
+    }
+
+    pub fn mint(to: address, amount: u256) -> bool {
+        require((msg.sender == ZERO) == false);
+        require(msg.sender == self.owner);
+        require(self.mintable);
+        require(self.paused == false);
+        require((to == ZERO) == false);
+        self.total_supply = self.total_supply + amount;
+        self.balances[to] = self.balances[to] + amount;
+        emit Transfer { from: ZERO, to: to, amount: amount };
+        return true;
+    }
+    pub fn burn(amount: u256) -> bool {
+        require((msg.sender == ZERO) == false);
+        require(self.burnable);
+        require(self.paused == false);
+        self.balances[msg.sender] = self.balances[msg.sender] - amount;
+        self.total_supply = self.total_supply - amount;
+        emit Transfer { from: msg.sender, to: ZERO, amount: amount };
+        return true;
+    }
+    pub fn transfer(to: address, amount: u256) -> bool {
+        require((msg.sender == ZERO) == false);
+        require((to == ZERO) == false);
+        require(self.paused == false);
+        self.balances[msg.sender] = self.balances[msg.sender] - amount;
+        self.balances[to] = self.balances[to] + amount;
+        emit Transfer { from: msg.sender, to: to, amount: amount };
+        return true;
+    }
+    pub fn pause() -> bool {
+        require((msg.sender == ZERO) == false);
+        require(msg.sender == self.owner);
+        require(self.pausable);
+        require(self.paused == false);
+        self.paused = true;
+        emit Paused { account: msg.sender };
+        return true;
+    }
+    pub fn unpause() -> bool {
+        require((msg.sender == ZERO) == false);
+        require(msg.sender == self.owner);
+        require(self.pausable);
+        require(self.paused);
+        self.paused = false;
+        emit Unpaused { account: msg.sender };
+        return true;
+    }
+    pub fn transfer_ownership(next: address) -> bool {
+        require((msg.sender == ZERO) == false);
+        require(msg.sender == self.owner);
+        require((next == ZERO) == false);
+        self.owner = next;
+        emit OwnershipTransferred { previous: msg.sender, next: next };
+        return true;
+    }
+    pub fn renounce_ownership() -> bool {
+        require((msg.sender == ZERO) == false);
+        require(msg.sender == self.owner);
+        self.owner = ZERO;
+        emit OwnershipTransferred { previous: msg.sender, next: ZERO };
+        return true;
+    }
+}

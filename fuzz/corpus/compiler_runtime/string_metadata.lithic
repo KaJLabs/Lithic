@@ -1,0 +1,9 @@
+contract Metadata {
+    state { name: string; }
+    event Named { name: string }
+    pub fn set(name: string) -> string {
+        self.name = name;
+        emit Named { name: self.name };
+        return self.name;
+    }
+}

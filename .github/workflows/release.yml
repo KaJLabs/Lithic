@@ -1,4 +1,4 @@
-name: Preview release
+name: Combined compiler and native runtime release candidate
 
 on:
   push:
@@ -15,6 +15,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -22,7 +24,7 @@ jobs:
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
             gh release create "$GITHUB_REF_NAME" --verify-tag --draft \
               --title "$GITHUB_REF_NAME" \
-              --notes "Preview toolchain candidate. Review the capability matrix and checksums before publishing."
+              --notes "Combined compiler/native-runtime candidate. Independent rebuild comparison, packaged FFI smoke, source inventory and SBOM are included. Separate release/security acceptance is required before publication."
 
   build:
     needs: prepare
@@ -32,13 +34,10 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            format: tar
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            format: zip
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
-            format: tar
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
@@ -46,46 +45,30 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - run: rustup toolchain install 1.96.0 --profile minimal
-      - run: cargo +1.96.0 build --release --locked -p lithc -p lithfmt -p lithlint
-      - name: Package Unix binaries
-        if: matrix.format == 'tar'
+      - run: rustup toolchain install 1.96.0 --profile minimal --component rustfmt,clippy
+      - run: cargo +1.96.0 fmt --all -- --check
+      - run: cargo +1.96.0 clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo +1.96.0 test --workspace --locked
+      - run: python -B -m unittest discover -s scripts/tests -p test_release_toolchain.py
+      - name: Build twice, compare binaries and exercise packaged compiler/runtime/verifier
         shell: bash
         run: |
           set -euo pipefail
-          package="lithic-toolchain-${GITHUB_REF_NAME}-${{ matrix.target }}"
-          mkdir -p "dist/$package/docs"
-          cp target/release/lithc target/release/lithfmt target/release/lithlint "dist/$package/"
-          cp README.md docs/IMPLEMENTATION_STATUS.md docs/LITHOVM_ABI_V9.md "dist/$package/docs/"
-          tar -czf "dist/$package.tar.gz" -C dist "$package"
-          if command -v sha256sum >/dev/null; then
-            (cd dist && sha256sum "$package.tar.gz" > "$package.tar.gz.sha256")
-          else
-            (cd dist && shasum -a 256 "$package.tar.gz" > "$package.tar.gz.sha256")
-          fi
-      - name: Package Windows binaries
-        if: matrix.format == 'zip'
-        shell: pwsh
-        run: |
-          $package = "lithic-toolchain-$env:GITHUB_REF_NAME-${{ matrix.target }}"
-          New-Item -ItemType Directory -Force "dist/$package/docs" | Out-Null
-          Copy-Item target/release/lithc.exe,target/release/lithfmt.exe,target/release/lithlint.exe "dist/$package/"
-          Copy-Item README.md,docs/IMPLEMENTATION_STATUS.md,docs/LITHOVM_ABI_V9.md "dist/$package/docs/"
-          Compress-Archive -Path "dist/$package" -DestinationPath "dist/$package.zip"
-          $hash = (Get-FileHash "dist/$package.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $package.zip" | Set-Content -NoNewline "dist/$package.zip.sha256"
+          python -B scripts/release_toolchain.py build \
+            --version "$GITHUB_REF_NAME" --target "${{ matrix.target }}" \
+            --output "${RUNNER_TEMP}/lithic-release"
       - name: Attest release archive provenance
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32
         with:
           subject-path: |
-            dist/*.tar.gz
-            dist/*.zip
+            ${{ runner.temp }}/lithic-release/*.tar.gz
+            ${{ runner.temp }}/lithic-release/*.zip
       - name: Upload release assets
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           shopt -s nullglob
-          files=(dist/*.tar.gz dist/*.zip dist/*.sha256)
+          files=("${RUNNER_TEMP}"/lithic-release/*.tar.gz "${RUNNER_TEMP}"/lithic-release/*.zip "${RUNNER_TEMP}"/lithic-release/*.sha256)
           test "${#files[@]}" -eq 2
-          gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
+          gh release upload "$GITHUB_REF_NAME" "${files[@]}"

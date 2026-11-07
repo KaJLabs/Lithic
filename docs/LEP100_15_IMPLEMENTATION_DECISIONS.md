@@ -36,3 +36,19 @@ Required vectors:
 Until these values are frozen, the compiler and VM may implement language and
 execution primitives, but no artifact should claim LEP100-15 signing
 interoperability or production conformance.
+
+## Proposed engineering candidate, 6 November
+
+[Official PR #14](https://github.com/KaJLabs/Lithic/pull/14) contains the single
+proposed signing profile and fixed vectors. Their hash-bound maintainer decision
+remains required. This branch adds native v16 byte/signature/read-only primitives
+and an executable, explicitly unapproved base-account fixture using that
+proposal's choices. Its canonical transaction hashes, signatures and signer IDs
+match the proposed independent fixtures; this does not convert the proposal
+into a normative standard.
+
+See the [supported behavior, implementation bounds and deployment gap](LITHOVM_DYNAMIC_VALUES_V1.md#account-primitives-and-proposed-base-account-candidate-v16).
+General `Vec`/struct syntax, guardian recovery and detached nested-account
+signatures are not implemented. EVM/EIP-1271, STATIC_CALL transactions and native
+PQ schemes remain rejected. Final account/profile scope, interoperability,
+official conformance and independent security acceptance remain open.

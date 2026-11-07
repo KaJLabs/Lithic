@@ -1,0 +1,34 @@
+name: Lithic fuzz smoke
+
+on:
+  pull_request:
+    paths:
+      - "fuzz/**"
+      - "packages/compiler/lithic-lithovm/**"
+      - "packages/vm/bytecode/**"
+      - "packages/vm/lithovm/**"
+      - "packages/vm/lithovm-host/**"
+      - "packages/vm/lithovm-ffi/**"
+      - "packages/standards/lep100-tests/**"
+      - "sdk/contracts/standards/**"
+      - "scripts/generate_native_account_candidate.py"
+      - ".github/workflows/fuzz.yml"
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [bytecode_decode, compiler_runtime, stateful_maps, synchronous_calls, child_creation, binary_values, account_authorization, ffi_records, gateway_receipts, native_custody]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: rustup toolchain install nightly --profile minimal
+      - run: cargo install cargo-fuzz --version 0.13.2 --locked
+      - run: cargo +nightly fuzz run ${{ matrix.target }} --fuzz-dir fuzz -- -max_total_time=30 -max_len=65536 -timeout=10

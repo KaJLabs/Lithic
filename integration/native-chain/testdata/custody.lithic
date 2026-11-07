@@ -1,0 +1,19 @@
+contract Vault {
+    state { initialized: bool; owner: address; sent: u256; }
+    event Paid { to: address, amount: u256 }
+    pub fn initialize(owner: address) -> bool {
+        require(self.initialized == false);
+        self.initialized = true;
+        self.owner = owner;
+        return true;
+    }
+    pub fn pay(to: address, amount: u256, accept: bool) -> u256 {
+        require(msg.sender == self.owner);
+        transfer_native(to, amount);
+        self.sent = self.sent + amount;
+        emit Paid { to: to, amount: amount };
+        require(accept);
+        return self.sent;
+    }
+    pub fn sent() -> u256 { return self.sent; }
+}

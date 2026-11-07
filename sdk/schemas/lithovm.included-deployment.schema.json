@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lithic.at/schemas/lithovm.included-deployment.schema.json",
+  "title": "LithoVM included deployment observation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "deploymentId", "state", "verificationState", "chainId", "transactionHash", "blockHash", "blockHeight", "transactionGasUsed", "creationIndex", "contractAddress", "creator", "codeHash", "origin"],
+  "properties": {
+    "schemaVersion": {"const": "lithovm-included-deployment-v1"},
+    "deploymentId": {"type": "string", "minLength": 1},
+    "state": {"const": "included"},
+    "verificationState": {"const": "unverified"},
+    "chainId": {"type": "string", "pattern": "^[1-9][0-9]*$"},
+    "transactionHash": {"$ref": "#/$defs/hash"},
+    "blockHash": {"$ref": "#/$defs/hash"},
+    "blockHeight": {"$ref": "#/$defs/uint"},
+    "transactionGasUsed": {"$ref": "#/$defs/uint"},
+    "creationIndex": {"type": "integer", "minimum": 0, "maximum": 63},
+    "contractAddress": {"$ref": "#/$defs/address"},
+    "creator": {"$ref": "#/$defs/address"},
+    "codeHash": {"$ref": "#/$defs/hash"},
+    "origin": {"oneOf": [
+      {"type": "object", "additionalProperties": false, "required": ["kind", "nonce"], "properties": {"kind": {"const": "transaction"}, "nonce": {"$ref": "#/$defs/uint"}}},
+      {"type": "object", "additionalProperties": false, "required": ["kind", "template", "salt"], "properties": {"kind": {"const": "child"}, "template": {"$ref": "#/$defs/address"}, "salt": {"$ref": "#/$defs/hash"}}}
+    ]}
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^0x[0-9a-f]{64}$"},
+    "address": {"type": "string", "pattern": "^0x[0-9a-f]{40}$"},
+    "uint": {"type": "string", "pattern": "^(0|[1-9][0-9]*)$"}
+  }
+}
